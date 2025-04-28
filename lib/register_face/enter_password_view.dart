@@ -3,8 +3,7 @@ import 'package:face_auth_compatible/common/utils/custom_text_field.dart';
 import 'package:face_auth_compatible/common/views/custom_button.dart';
 import 'package:face_auth_compatible/common/utils/custom_snackbar.dart';
 import 'package:face_auth_compatible/constants/theme.dart';
-import 'package:face_auth_compatible/model/password_model.dart';
-import 'package:face_auth_compatible/register_face/register_face_view.dart';
+import 'package:face_auth_compatible/register_face/user_management_view.dart'; // New import
 import 'package:flutter/material.dart';
 
 class EnterPasswordView extends StatelessWidget {
@@ -51,22 +50,45 @@ class EnterPasswordView extends StatelessWidget {
                   onTap: () async {
                     if (_formFieldKey.currentState!.validate()) {
                       FocusScope.of(context).unfocus();
-                      FirebaseFirestore.instance
-                          .collection("password")
-                          .doc("PG0eZfMW5FfkOy5JCXuS")
-                          .get()
-                          .then((snap) {
-                        Password password = Password.fromJson(snap.data()!);
-                        if (password.password == _controller.text.trim()) {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) => const RegisterFaceView(),
-                            ),
-                          );
+
+                      // Show loading indicator
+                      showDialog(
+                        context: context,
+                        barrierDismissible: false,
+                        builder: (context) => const Center(
+                          child: CircularProgressIndicator(color: accentColor),
+                        ),
+                      );
+
+                      try {
+                        final snap = await FirebaseFirestore.instance
+                            .collection("password")
+                            .doc("PG0eZfMW5FfkOy5JCXuS")
+                            .get();
+
+                        // Close loading dialog
+                        Navigator.of(context).pop();
+
+                        if (snap.exists && snap.data() != null) {
+                          String? storedPassword = snap.data()!['password'];
+                          if (storedPassword == _controller.text.trim()) {
+                            // Navigate to User Management instead of RegisterFaceView
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (context) => const UserManagementView(),
+                              ),
+                            );
+                          } else {
+                            CustomSnackBar.errorSnackBar("Wrong Password :( ");
+                          }
                         } else {
-                          CustomSnackBar.errorSnackBar("Wrong Password :( ");
+                          CustomSnackBar.errorSnackBar("Password document not found!");
                         }
-                      });
+                      } catch (e) {
+                        // Close loading dialog if it's showing
+                        Navigator.of(context, rootNavigator: true).pop();
+                        CustomSnackBar.errorSnackBar("Error: ${e.toString()}");
+                      }
                     }
                   },
                 ),

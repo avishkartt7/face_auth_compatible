@@ -88,7 +88,7 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
                         ),
                       );
                       _faceFeatures =
-                          await extractFaceFeatures(inputImage, _faceDetector);
+                      await extractFaceFeatures(inputImage, _faceDetector);
                       setState(() {});
                       if (mounted) Navigator.of(context).pop();
                     },

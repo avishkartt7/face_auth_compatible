@@ -99,7 +99,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
                       height: 0.82.sh,
                       width: double.infinity,
                       padding:
-                          EdgeInsets.fromLTRB(0.05.sw, 0.025.sh, 0.05.sw, 0),
+                      EdgeInsets.fromLTRB(0.05.sw, 0.025.sh, 0.05.sw, 0),
                       decoration: BoxDecoration(
                         color: overlayContainerClr,
                         borderRadius: BorderRadius.only(
@@ -187,9 +187,9 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
     double ratioMouth = distMouth1 / distMouth2;
 
     double distNoseToMouth1 =
-        euclideanDistance(face1.noseBase!, face1.bottomMouth!);
+    euclideanDistance(face1.noseBase!, face1.bottomMouth!);
     double distNoseToMouth2 =
-        euclideanDistance(face2.noseBase!, face2.bottomMouth!);
+    euclideanDistance(face2.noseBase!, face2.bottomMouth!);
 
     double ratioNoseToMouth = distNoseToMouth1 / distNoseToMouth2;
 
@@ -203,7 +203,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
 // A function to calculate the Euclidean distance between two points
   double euclideanDistance(Points p1, Points p2) {
     final sqr =
-        math.sqrt(math.pow((p1.x! - p2.x!), 2) + math.pow((p1.y! - p2.y!), 2));
+    math.sqrt(math.pow((p1.x! - p2.x!), 2) + math.pow((p1.y! - p2.y!), 2));
     return sqr;
   }
 
@@ -237,7 +237,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
         _showFailureDialog(
           title: "No Users Registered",
           description:
-              "Make sure users are registered first before Authenticating.",
+          "Make sure users are registered first before Authenticating.",
         );
       }
     });
@@ -259,7 +259,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
           jsonEncode(response!.results), 0.75);
 
       var split =
-          regula.MatchFacesSimilarityThresholdSplit.fromJson(json.decode(str));
+      regula.MatchFacesSimilarityThresholdSplit.fromJson(json.decode(str));
       setState(() {
         _similarity = split!.matchedFaces.isNotEmpty
             ? (split.matchedFaces[0]!.similarity! * 100).toStringAsFixed(2)
@@ -393,7 +393,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
         _showFailureDialog(
           title: "User Not Found",
           description:
-              "User is not registered yet. Register first to authenticate.",
+          "User is not registered yet. Register first to authenticate.",
         );
       }
     });
