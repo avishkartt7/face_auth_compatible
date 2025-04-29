@@ -46,7 +46,10 @@ class _UserManagementViewState extends State<UserManagementView> {
                 onTap: () {
                   Navigator.of(context).push(
                     MaterialPageRoute(
-                      builder: (context) => const RegisterFaceView(),
+                      builder: (context) => RegisterFaceView(
+                        employeeId: "adminCreated", // Temporary ID for admin-created users
+                        employeePin: "0000", // Temporary PIN that will be changed
+                      ),
                     ),
                   );
                 },
@@ -97,7 +100,7 @@ class _UserManagementViewState extends State<UserManagementView> {
 
   Widget _buildUserList() {
     return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection("users").snapshots(),
+      stream: FirebaseFirestore.instance.collection("employees").snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(
@@ -128,7 +131,7 @@ class _UserManagementViewState extends State<UserManagementView> {
           itemCount: snapshot.data!.docs.length,
           itemBuilder: (context, index) {
             var doc = snapshot.data!.docs[index];
-            UserModel user = UserModel.fromJson(doc.data() as Map<String, dynamic>);
+            Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
 
             return Card(
               margin: EdgeInsets.only(bottom: 0.02.sh),
@@ -136,21 +139,21 @@ class _UserManagementViewState extends State<UserManagementView> {
               child: ListTile(
                 contentPadding: const EdgeInsets.all(12),
                 title: Text(
-                  user.name ?? "Unknown User",
+                  data['name'] ?? "Unknown User",
                   style: const TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 18,
                   ),
                 ),
                 subtitle: Text(
-                  "Registered: ${_formatDate(user.registeredOn)}",
+                  "PIN: ${data['pin']}",
                   style: TextStyle(
                     color: primaryBlack.withOpacity(0.6),
                   ),
                 ),
                 trailing: IconButton(
                   icon: const Icon(Icons.delete, color: Colors.red),
-                  onPressed: () => _confirmDeleteUser(context, user),
+                  onPressed: () => _confirmDeleteUser(context, doc.id, data['name'] ?? "this user"),
                 ),
               ),
             );
@@ -160,18 +163,12 @@ class _UserManagementViewState extends State<UserManagementView> {
     );
   }
 
-  String _formatDate(int? timestamp) {
-    if (timestamp == null) return "Unknown";
-    final DateTime date = DateTime.fromMillisecondsSinceEpoch(timestamp);
-    return "${date.day}/${date.month}/${date.year}";
-  }
-
-  void _confirmDeleteUser(BuildContext context, UserModel user) {
+  void _confirmDeleteUser(BuildContext context, String userId, String userName) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text("Delete User"),
-        content: Text("Are you sure you want to delete ${user.name}?"),
+        content: Text("Are you sure you want to delete $userName?"),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -180,8 +177,8 @@ class _UserManagementViewState extends State<UserManagementView> {
           TextButton(
             onPressed: () {
               FirebaseFirestore.instance
-                  .collection("users")
-                  .doc(user.id)
+                  .collection("employees")
+                  .doc(userId)
                   .delete()
                   .then((_) {
                 Navigator.pop(context);

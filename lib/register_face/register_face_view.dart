@@ -6,12 +6,21 @@ import 'package:face_auth_compatible/common/views/custom_button.dart';
 import 'package:face_auth_compatible/common/utils/extensions/size_extension.dart';
 import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:face_auth_compatible/model/user_model.dart';
-import 'package:face_auth_compatible/register_face/enter_details_view.dart';
+import 'package:face_auth_compatible/common/utils/custom_snackbar.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:face_auth_compatible/authenticate_face/authenticate_face_view.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 class RegisterFaceView extends StatefulWidget {
-  const RegisterFaceView({Key? key}) : super(key: key);
+  final String employeeId;
+  final String employeePin;
+
+  const RegisterFaceView({
+    Key? key,
+    required this.employeeId,
+    required this.employeePin,
+  }) : super(key: key);
 
   @override
   State<RegisterFaceView> createState() => _RegisterFaceViewState();
@@ -26,6 +35,7 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
   );
   String? _image;
   FaceFeatures? _faceFeatures;
+  bool isRegistering = false;
 
   @override
   void dispose() {
@@ -40,7 +50,7 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
       appBar: AppBar(
         centerTitle: true,
         backgroundColor: appBarColor,
-        title: const Text("Register User"),
+        title: const Text("Register Your Face"),
         elevation: 0,
       ),
       body: Container(
@@ -71,6 +81,23 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.start,
                 children: [
+                  const Text(
+                    "Let's register your face for authentication",
+                    style: TextStyle(
+                      color: primaryWhite,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  SizedBox(height: 0.02.sh),
+                  const Text(
+                    "Please look directly at the camera in good lighting",
+                    style: TextStyle(
+                      color: primaryWhite,
+                      fontSize: 14,
+                    ),
+                  ),
+                  SizedBox(height: 0.02.sh),
                   CameraView(
                     onImage: (image) {
                       setState(() {
@@ -94,19 +121,12 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
                     },
                   ),
                   const Spacer(),
-                  if (_image != null)
+                  if (isRegistering)
+                    const CircularProgressIndicator(color: accentColor)
+                  else if (_image != null)
                     CustomButton(
-                      text: "Start Registering",
-                      onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (context) => EnterDetailsView(
-                              image: _image!,
-                              faceFeatures: _faceFeatures!,
-                            ),
-                          ),
-                        );
-                      },
+                      text: "Register Face",
+                      onTap: _registerFace,
                     ),
                 ],
               ),
@@ -115,5 +135,49 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
         ),
       ),
     );
+  }
+
+  void _registerFace() async {
+    if (_image == null || _faceFeatures == null) {
+      CustomSnackBar.errorSnackBar("Please capture your face first");
+      return;
+    }
+
+    setState(() => isRegistering = true);
+
+    try {
+      // Save face data to Firestore
+      await FirebaseFirestore.instance
+          .collection('employees')
+          .doc(widget.employeeId)
+          .update({
+        'image': _image,
+        'faceFeatures': _faceFeatures!.toJson(),
+        'faceRegistered': true,
+      });
+
+      setState(() => isRegistering = false);
+
+      // Show success message
+      CustomSnackBar.successSnackBar("Face registered successfully!");
+
+      // Navigate to face authentication for verification - keep the old API for now
+      if (mounted) {
+        // Update in RegisterFaceView._registerFace method (inside the if (mounted) block)
+
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => AuthenticateFaceView(
+              employeeId: widget.employeeId,
+              employeePin: widget.employeePin,
+              isRegistrationValidation: true,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => isRegistering = false);
+      CustomSnackBar.errorSnackBar("Error registering face: $e");
+    }
   }
 }

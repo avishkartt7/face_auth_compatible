@@ -4,20 +4,20 @@ import 'package:face_auth_compatible/common/utils/custom_snackbar.dart';
 import 'package:face_auth_compatible/common/utils/extensions/size_extension.dart';
 import 'package:face_auth_compatible/common/utils/screen_size_util.dart';
 import 'package:face_auth_compatible/constants/theme.dart';
+import 'package:face_auth_compatible/pin_entry/pin_entry_view.dart';
 import 'package:face_auth_compatible/register_face/enter_password_view.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  Firebase.initializeApp();
+  await Firebase.initializeApp();
   runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -44,7 +44,16 @@ class MyApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const Home(),
+      // Use a builder to initialize context
+      home: Builder(
+        builder: (context) {
+          // Initialize the required contexts
+          ScreenSizeUtil.context = context;
+          CustomSnackBar.context = context;
+          // Now we can safely return the PinEntryView
+          return const PinEntryView();
+        },
+      ),
     );
   }
 }
