@@ -80,7 +80,7 @@ class _MyAppState extends State<MyApp> {
           } else if (_showOnboarding!) {
             return const OnboardingScreen();
           } else {
-            return const AppPasswordEntryView();
+            return const PinEntryView();
           }
         },
       ),
