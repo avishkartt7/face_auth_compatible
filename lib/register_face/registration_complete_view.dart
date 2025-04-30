@@ -1,9 +1,9 @@
 // lib/register_face/registration_complete_view.dart
 
 import 'package:flutter/material.dart';
-import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:face_auth_compatible/pin_entry/pin_entry_view.dart';
+import 'package:face_auth_compatible/constants/theme.dart';
 
 class RegistrationCompleteView extends StatelessWidget {
   const RegistrationCompleteView({Key? key}) : super(key: key);
@@ -30,24 +30,16 @@ class RegistrationCompleteView extends StatelessWidget {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Using a placeholder for now - replace with your actual SVG
-                // If you don't have the SVG file yet, use an Icon instead
-
-                // Uncomment this when you have the SVG file
-                // SvgPicture.asset(
-                //   'assets/images/registration_complete.svg',
-                //   height: 250,
-                // ),
-
-                // Use this Icon as a placeholder until you have the SVG
-                Icon(
-                  Icons.check_circle_outline,
-                  size: 150,
-                  color: Colors.white,
+                // Registration Complete SVG Image
+                SvgPicture.asset(
+                  'assets/images/registration_complete.svg',
+                  height: 250,
+                  width: 250,
                 ),
 
                 const SizedBox(height: 40),
 
+                // Success Message
                 const Text(
                   "Registration Complete!",
                   style: TextStyle(
@@ -59,6 +51,7 @@ class RegistrationCompleteView extends StatelessWidget {
 
                 const SizedBox(height: 16),
 
+                // Description
                 const Text(
                   "Your account has been successfully registered. You can now use the app with facial authentication.",
                   textAlign: TextAlign.center,
@@ -70,10 +63,9 @@ class RegistrationCompleteView extends StatelessWidget {
 
                 const SizedBox(height: 60),
 
-                // Using a direct ElevatedButton to avoid potential issues with CustomButton
+                // Get Started Button
                 ElevatedButton(
                   onPressed: () {
-                    // Navigate to the login screen (PIN entry view)
                     Navigator.of(context).pushAndRemoveUntil(
                       MaterialPageRoute(
                         builder: (context) => const PinEntryView(),

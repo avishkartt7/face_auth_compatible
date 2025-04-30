@@ -1,22 +1,17 @@
-// lib/main.dart - Updated version
+// lib/main.dart
 
-import 'package:face_auth_compatible/onboarding/onboarding_screen.dart';
-import 'package:face_auth_compatible/pin_entry/pin_entry_view.dart';
-import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:face_auth_compatible/onboarding/onboarding_screen.dart';
+import 'package:face_auth_compatible/pin_entry/pin_entry_view.dart';
+import 'package:face_auth_compatible/pin_entry/app_password_entry_view.dart';
+import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
-
-  // Set up error handling
-  FlutterError.onError = (FlutterErrorDetails details) {
-    FlutterError.presentError(details);
-    // Log error to a service if needed
-  };
-
   runApp(const MyApp());
 }
 
@@ -33,16 +28,44 @@ class _MyAppState extends State<MyApp> {
   @override
   void initState() {
     super.initState();
-    _checkOnboardingStatus();
+    _checkLoginStatus();
   }
 
-  Future<void> _checkOnboardingStatus() async {
+  Future<void> _checkLoginStatus() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     bool onboardingComplete = prefs.getBool('onboardingComplete') ?? false;
 
     setState(() {
-      _showOnboarding = !onboardingComplete;
+      // If onboarding not completed, show onboarding screens
+      if (!onboardingComplete) {
+        _showOnboarding = true;
+        return;
+      }
+
+      // Check if user is registered
+      _checkRegistrationStatus();
     });
+  }
+
+  Future<void> _checkRegistrationStatus() async {
+    try {
+      QuerySnapshot userQuery = await FirebaseFirestore.instance
+          .collection('employees')
+          .where('registrationCompleted', isEqualTo: true)
+          .limit(1)
+          .get();
+
+      setState(() {
+        // If no registered user found, show PIN entry
+        // Otherwise show app password entry
+        _showOnboarding = userQuery.docs.isEmpty;
+      });
+    } catch (e) {
+      print("Error checking registration status: $e");
+      setState(() {
+        _showOnboarding = true;
+      });
+    }
   }
 
   @override
@@ -71,23 +94,11 @@ class _MyAppState extends State<MyApp> {
           ),
         ),
       ),
-
-      // Error handling at app level
-      builder: (context, child) {
-        // Add error handling wrapper
-        return MediaQuery(
-          // Ensure text scaling is reasonable to prevent layout issues
-          data: MediaQuery.of(context).copyWith(textScaleFactor: 1.0),
-          child: child ?? const SizedBox(),
-        );
-      },
-
-      // Use a simple conditional navigation instead of a Builder
       home: _showOnboarding == null
           ? const SplashScreen()
           : _showOnboarding!
-          ? const OnboardingScreen()
-          : const PinEntryView(),
+          ? const OnboardingScreen()  // Show onboarding for first time
+          : const AppPasswordEntryView(),  // Show app password for registered users
     );
   }
 }

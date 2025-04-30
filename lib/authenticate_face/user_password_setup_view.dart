@@ -8,6 +8,8 @@ import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:face_auth_compatible/register_face/registration_complete_view.dart';
 import 'package:flutter/material.dart';
 
+import 'package:face_auth_compatible/pin_entry/app_password_entry_view.dart';
+
 class UserPasswordSetupView extends StatefulWidget {
   final String employeeId;
   final String employeePin;
@@ -163,7 +165,6 @@ class _UserPasswordSetupViewState extends State<UserPasswordSetupView> {
     setState(() => _isLoading = true);
 
     try {
-      // Update the employee document with the app password
       await FirebaseFirestore.instance
           .collection('employees')
           .doc(widget.employeeId)
@@ -174,15 +175,12 @@ class _UserPasswordSetupViewState extends State<UserPasswordSetupView> {
 
       setState(() => _isLoading = false);
 
-      CustomSnackBar.successSnackBar(context, "Password created successfully!");
-
-      // Navigate to the completion screen
       if (mounted) {
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(
-            builder: (context) => const RegistrationCompleteView(),
+            builder: (context) => const AppPasswordEntryView(), // Navigate to app password entry
           ),
-              (route) => false, // This removes all previous routes
+              (route) => false,
         );
       }
     } catch (e) {
