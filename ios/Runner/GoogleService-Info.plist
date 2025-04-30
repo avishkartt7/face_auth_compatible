@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>API_KEY</key>
+	<string>AIzaSyAOv9FWz5IjVp_wVbHpneTaA2fVWC_ah1A</string>
+	<key>GCM_SENDER_ID</key>
+	<string>430750432541</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.example.faceAuthCompatible</string>
+	<key>PROJECT_ID</key>
+	<string>face-authentication-app-6bd1e</string>
+	<key>STORAGE_BUCKET</key>
+	<string>face-authentication-app-6bd1e.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true></true>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:430750432541:ios:e1f5fcaad19dea7c4af5f4</string>
+</dict>
+</plist>
