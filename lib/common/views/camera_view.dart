@@ -47,19 +47,19 @@ class _CameraViewState extends State<CameraView> {
         SizedBox(height: 0.025.sh),
         _image != null
             ? CircleAvatar(
-                radius: 0.15.sh,
-                backgroundColor: const Color(0xffD9D9D9),
-                backgroundImage: FileImage(_image!),
-              )
+          radius: 0.15.sh,
+          backgroundColor: const Color(0xffD9D9D9),
+          backgroundImage: FileImage(_image!),
+        )
             : CircleAvatar(
-                radius: 0.15.sh,
-                backgroundColor: const Color(0xffD9D9D9),
-                child: Icon(
-                  Icons.camera_alt,
-                  size: 0.09.sh,
-                  color: const Color(0xff2E2E2E),
-                ),
-              ),
+          radius: 0.15.sh,
+          backgroundColor: const Color(0xffD9D9D9),
+          child: Icon(
+            Icons.camera_alt,
+            size: 0.09.sh,
+            color: const Color(0xff2E2E2E),
+          ),
+        ),
         GestureDetector(
           onTap: _getImage,
           child: Container(

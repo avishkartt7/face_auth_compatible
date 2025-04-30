@@ -1,10 +1,7 @@
-// lib/main.dart
+// lib/main.dart - Updated version
 
 import 'package:face_auth_compatible/onboarding/onboarding_screen.dart';
 import 'package:face_auth_compatible/pin_entry/pin_entry_view.dart';
-import 'package:face_auth_compatible/common/utils/custom_snackbar.dart';
-import 'package:face_auth_compatible/common/utils/extensions/size_extension.dart';
-import 'package:face_auth_compatible/common/utils/screen_size_util.dart';
 import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -13,6 +10,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+
+  // Set up error handling
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+    // Log error to a service if needed
+  };
+
   runApp(const MyApp());
 }
 
@@ -67,23 +71,23 @@ class _MyAppState extends State<MyApp> {
           ),
         ),
       ),
-      // Use a builder to initialize context
-      home: Builder(
-        builder: (context) {
-          // Initialize the required contexts
-          ScreenSizeUtil.context = context;
-          CustomSnackBar.context = context;
 
-          // Now return the appropriate start screen
-          if (_showOnboarding == null) {
-            return const SplashScreen();
-          } else if (_showOnboarding!) {
-            return const OnboardingScreen();
-          } else {
-            return const PinEntryView();
-          }
-        },
-      ),
+      // Error handling at app level
+      builder: (context, child) {
+        // Add error handling wrapper
+        return MediaQuery(
+          // Ensure text scaling is reasonable to prevent layout issues
+          data: MediaQuery.of(context).copyWith(textScaleFactor: 1.0),
+          child: child ?? const SizedBox(),
+        );
+      },
+
+      // Use a simple conditional navigation instead of a Builder
+      home: _showOnboarding == null
+          ? const SplashScreen()
+          : _showOnboarding!
+          ? const OnboardingScreen()
+          : const PinEntryView(),
     );
   }
 }

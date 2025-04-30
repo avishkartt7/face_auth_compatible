@@ -5,6 +5,7 @@ import 'package:face_auth_compatible/common/utils/custom_snackbar.dart';
 import 'package:face_auth_compatible/common/utils/extensions/size_extension.dart';
 import 'package:face_auth_compatible/common/views/custom_button.dart';
 import 'package:face_auth_compatible/constants/theme.dart';
+import 'package:face_auth_compatible/register_face/registration_complete_view.dart';
 import 'package:flutter/material.dart';
 
 class UserPasswordSetupView extends StatefulWidget {
@@ -35,8 +36,9 @@ class _UserPasswordSetupViewState extends State<UserPasswordSetupView> {
 
   @override
   Widget build(BuildContext context) {
-    // Initialize context
-    CustomSnackBar.context = context;
+    // Use context directly instead of setting it in a global variable
+    final double screenWidth = MediaQuery.of(context).size.width;
+    final double screenHeight = MediaQuery.of(context).size.height;
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -59,16 +61,16 @@ class _UserPasswordSetupViewState extends State<UserPasswordSetupView> {
         ),
         child: Center(
           child: SingleChildScrollView(
-            padding: EdgeInsets.all(0.06.sw),
+            padding: EdgeInsets.all(screenWidth * 0.06),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(
                   Icons.lock_outline,
-                  size: 0.1.sh,
+                  size: screenHeight * 0.1,
                   color: Colors.white,
                 ),
-                SizedBox(height: 0.04.sh),
+                SizedBox(height: screenHeight * 0.04),
                 const Text(
                   "Create a 4-digit password for quick app access",
                   style: TextStyle(
@@ -78,23 +80,23 @@ class _UserPasswordSetupViewState extends State<UserPasswordSetupView> {
                   ),
                   textAlign: TextAlign.center,
                 ),
-                SizedBox(height: 0.05.sh),
+                SizedBox(height: screenHeight * 0.05),
                 _buildPasswordField(
                   controller: _passwordController,
                   label: "Enter Password",
                 ),
-                SizedBox(height: 0.03.sh),
+                SizedBox(height: screenHeight * 0.03),
                 _buildPasswordField(
                   controller: _confirmPasswordController,
                   label: "Confirm Password",
                 ),
-                SizedBox(height: 0.05.sh),
+                SizedBox(height: screenHeight * 0.05),
                 if (_isLoading)
                   const CircularProgressIndicator(color: accentColor)
                 else
                   CustomButton(
                     text: "Create Password",
-                    onTap: _createPassword,
+                    onTap: () => _createPassword(context),
                   ),
               ],
             ),
@@ -108,6 +110,8 @@ class _UserPasswordSetupViewState extends State<UserPasswordSetupView> {
     required TextEditingController controller,
     required String label,
   }) {
+    final double screenHeight = MediaQuery.of(context).size.height;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -118,7 +122,7 @@ class _UserPasswordSetupViewState extends State<UserPasswordSetupView> {
             fontSize: 16,
           ),
         ),
-        SizedBox(height: 0.01.sh),
+        SizedBox(height: screenHeight * 0.01),
         TextField(
           controller: controller,
           obscureText: true,
@@ -144,15 +148,15 @@ class _UserPasswordSetupViewState extends State<UserPasswordSetupView> {
     );
   }
 
-  void _createPassword() async {
+  void _createPassword(BuildContext context) async {
     // Validate inputs
     if (_passwordController.text.length != 4) {
-      CustomSnackBar.errorSnackBar("Password must be exactly 4 digits");
+      CustomSnackBar.errorSnackBar(context, "Password must be exactly 4 digits");
       return;
     }
 
     if (_passwordController.text != _confirmPasswordController.text) {
-      CustomSnackBar.errorSnackBar("Passwords do not match");
+      CustomSnackBar.errorSnackBar(context, "Passwords do not match");
       return;
     }
 
@@ -170,47 +174,20 @@ class _UserPasswordSetupViewState extends State<UserPasswordSetupView> {
 
       setState(() => _isLoading = false);
 
-      CustomSnackBar.successSnackBar("Password created successfully!");
+      CustomSnackBar.successSnackBar(context, "Password created successfully!");
 
-      // Show completion dialog
-      _showCompletionDialog();
+      // Navigate to the completion screen
+      if (mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (context) => const RegistrationCompleteView(),
+          ),
+              (route) => false, // This removes all previous routes
+        );
+      }
     } catch (e) {
       setState(() => _isLoading = false);
-      CustomSnackBar.errorSnackBar("Error creating password: $e");
+      CustomSnackBar.errorSnackBar(context, "Error creating password: $e");
     }
-  }
-
-  void _showCompletionDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text("Registration Complete"),
-        content: const Text(
-          "Your registration is now complete! You can use your app password to quickly log in next time.",
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              // Navigate to home screen (clear all routes)
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(
-                  builder: (context) => const Scaffold(
-                    body: Center(
-                      child: Text("Registration Complete - Dashboard will be implemented next"),
-                    ),
-                  ),
-                ),
-                    (route) => false,
-              );
-            },
-            child: const Text(
-              "Get Started",
-              style: TextStyle(color: accentColor),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }

@@ -1,3 +1,5 @@
+// Update to lib/pin_entry/user_profile_view.dart
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:face_auth_compatible/common/utils/custom_snackbar.dart';
 import 'package:face_auth_compatible/common/views/custom_button.dart';
@@ -68,8 +70,13 @@ class _UserProfileViewState extends State<UserProfileView> {
         });
       }
     } catch (e) {
-      if (context.mounted) {
-        CustomSnackBar.errorSnackBar("Error loading profile: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Error loading profile: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }
@@ -87,8 +94,8 @@ class _UserProfileViewState extends State<UserProfileView> {
 
   @override
   Widget build(BuildContext context) {
-    // Make sure CustomSnackBar context is initialized
-    CustomSnackBar.context = context;
+    // Initialize context directly here instead of using a global variable
+    // This is much safer and avoids the late initialization error
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -127,23 +134,22 @@ class _UserProfileViewState extends State<UserProfileView> {
         child: _isLoading
             ? const Center(child: CircularProgressIndicator(color: accentColor))
             : SingleChildScrollView(
-          // Use fixed padding instead of responsive sizing
           padding: const EdgeInsets.fromLTRB(20, 100, 20, 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Center(
                 child: CircleAvatar(
-                  radius: 60, // Fixed size
+                  radius: 60,
                   backgroundColor: primaryWhite.withOpacity(0.2),
                   child: const Icon(
                     Icons.person,
-                    size: 80, // Fixed size
+                    size: 80,
                     color: primaryWhite,
                   ),
                 ),
               ),
-              const SizedBox(height: 32), // Fixed size
+              const SizedBox(height: 32),
               _buildProfileField(
                 label: "Name",
                 controller: _nameController,
@@ -176,7 +182,7 @@ class _UserProfileViewState extends State<UserProfileView> {
                 enabled: _isEditing,
                 hint: "your.email@example.com",
               ),
-              const SizedBox(height: 32), // Fixed size
+              const SizedBox(height: 32),
               if (widget.isNewUser || _isEditing)
                 Center(
                   child: CustomButton(
@@ -198,7 +204,7 @@ class _UserProfileViewState extends State<UserProfileView> {
     String? hint,
   }) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16), // Fixed size
+      padding: const EdgeInsets.only(bottom: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -209,7 +215,7 @@ class _UserProfileViewState extends State<UserProfileView> {
               fontSize: 16,
             ),
           ),
-          const SizedBox(height: 8), // Fixed size
+          const SizedBox(height: 8),
           TextField(
             controller: controller,
             enabled: enabled,
@@ -247,7 +253,12 @@ class _UserProfileViewState extends State<UserProfileView> {
     if (_nameController.text.trim().isEmpty ||
         _designationController.text.trim().isEmpty ||
         _departmentController.text.trim().isEmpty) {
-      CustomSnackBar.errorSnackBar("Please fill in all required fields");
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Please fill in all required fields"),
+          backgroundColor: Colors.red,
+        ),
+      );
       return;
     }
 
@@ -285,11 +296,25 @@ class _UserProfileViewState extends State<UserProfileView> {
       } else {
         // If existing user, just exit edit mode
         setState(() => _isEditing = false);
-        CustomSnackBar.successSnackBar("Profile updated successfully");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Profile updated successfully"),
+              backgroundColor: accentColor,
+            ),
+          );
+        }
       }
     } catch (e) {
       setState(() => _isLoading = false);
-      CustomSnackBar.errorSnackBar("Error saving profile: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Error saving profile: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 }
