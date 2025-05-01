@@ -1,4 +1,4 @@
-// lib/pin_entry/app_password_entry_view.dart
+// lib/pin_entry/app_password_entry_view.dart - Update navigate to dashboard
 
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:face_auth_compatible/common/utils/custom_snackbar.dart';
 import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:face_auth_compatible/dashboard/dashboard_view.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class AppPasswordEntryView extends StatefulWidget {
   const AppPasswordEntryView({Key? key}) : super(key: key);
@@ -66,21 +67,29 @@ class _AppPasswordEntryViewState extends State<AppPasswordEntryView> {
       setState(() => _isLoading = false);
 
       if (querySnapshot.docs.isEmpty) {
-        CustomSnackBar.errorSnackBar('Invalid app password. Please try again.');
+        CustomSnackBar.errorSnackBar(context, 'Invalid app password. Please try again.');
         _clearPassword();
         return;
       }
 
+      // Get the employee document and ID
+      final DocumentSnapshot employeeDoc = querySnapshot.docs.first;
+      final String employeeId = employeeDoc.id;
+
+      // Save authenticated user ID to SharedPreferences
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setString('authenticated_user_id', employeeId);
+
       if (mounted) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
-            builder: (context) => const DashboardView(),
+            builder: (context) => DashboardView(employeeId: employeeId),
           ),
         );
       }
     } catch (e) {
       setState(() => _isLoading = false);
-      CustomSnackBar.errorSnackBar('Error verifying password: $e');
+      CustomSnackBar.errorSnackBar(context, 'Error verifying password: $e');
     }
   }
 

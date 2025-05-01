@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:face_auth_compatible/onboarding/onboarding_screen.dart';
 import 'package:face_auth_compatible/pin_entry/pin_entry_view.dart';
 import 'package:face_auth_compatible/pin_entry/app_password_entry_view.dart';
+import 'package:face_auth_compatible/dashboard/dashboard_view.dart';
 import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -24,6 +25,7 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> {
   bool? _showOnboarding;
+  String? _loggedInEmployeeId;
 
   @override
   void initState() {
@@ -34,20 +36,37 @@ class _MyAppState extends State<MyApp> {
   Future<void> _checkLoginStatus() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     bool onboardingComplete = prefs.getBool('onboardingComplete') ?? false;
+    String? authenticatedUserId = prefs.getString('authenticated_user_id');
 
-    setState(() {
-      // If onboarding not completed, show onboarding screens
-      if (!onboardingComplete) {
+    if (!onboardingComplete) {
+      setState(() {
         _showOnboarding = true;
-        return;
+      });
+      return;
+    }
+
+    // Check if a user is already authenticated (has an app password)
+    if (authenticatedUserId != null) {
+      // Verify user exists in Firestore
+      try {
+        DocumentSnapshot doc = await FirebaseFirestore.instance
+            .collection('employees')
+            .doc(authenticatedUserId)
+            .get();
+
+        if (doc.exists) {
+          setState(() {
+            _loggedInEmployeeId = authenticatedUserId;
+            _showOnboarding = false;
+          });
+          return;
+        }
+      } catch (e) {
+        print("Error checking authenticated user: $e");
       }
+    }
 
-      // Check if user is registered
-      _checkRegistrationStatus();
-    });
-  }
-
-  Future<void> _checkRegistrationStatus() async {
+    // Check if any user is registered
     try {
       QuerySnapshot userQuery = await FirebaseFirestore.instance
           .collection('employees')
@@ -56,9 +75,8 @@ class _MyAppState extends State<MyApp> {
           .get();
 
       setState(() {
-        // If no registered user found, show PIN entry
-        // Otherwise show app password entry
-        _showOnboarding = userQuery.docs.isEmpty;
+        // If users exist, show app password entry, otherwise show PIN entry
+        _showOnboarding = false;
       });
     } catch (e) {
       print("Error checking registration status: $e");
@@ -72,7 +90,7 @@ class _MyAppState extends State<MyApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Face Authentication App',
+      title: 'PHOENICIAN',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSwatch(accentColor: accentColor),
         inputDecorationTheme: InputDecorationTheme(
@@ -94,12 +112,25 @@ class _MyAppState extends State<MyApp> {
           ),
         ),
       ),
-      home: _showOnboarding == null
-          ? const SplashScreen()
-          : _showOnboarding!
-          ? const OnboardingScreen()  // Show onboarding for first time
-          : const AppPasswordEntryView(),  // Show app password for registered users
+      home: _getInitialScreen(),
     );
+  }
+
+  Widget _getInitialScreen() {
+    if (_showOnboarding == null) {
+      return const SplashScreen();
+    }
+
+    if (_showOnboarding!) {
+      return const OnboardingScreen();
+    }
+
+    if (_loggedInEmployeeId != null) {
+      return DashboardView(employeeId: _loggedInEmployeeId!);
+    }
+
+    // Default to app password entry for registered users
+    return const AppPasswordEntryView();
   }
 }
 
@@ -121,7 +152,22 @@ class SplashScreen extends StatelessWidget {
           ),
         ),
         child: const Center(
-          child: CircularProgressIndicator(color: Colors.white),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                "PHOENICIAN",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 2,
+                ),
+              ),
+              SizedBox(height: 16),
+              CircularProgressIndicator(color: Colors.white),
+            ],
+          ),
         ),
       ),
     );
