@@ -20,7 +20,7 @@ class DashboardView extends StatefulWidget {
   State<DashboardView> createState() => _DashboardViewState();
 }
 
-class _DashboardViewState extends State<DashboardView> {
+class _DashboardViewState extends State<DashboardView> with SingleTickerProviderStateMixin {
   bool _isLoading = true;
   bool _isDarkMode = false;
   Map<String, dynamic>? _userData;
@@ -28,12 +28,16 @@ class _DashboardViewState extends State<DashboardView> {
   DateTime? _checkInTime;
   String _formattedDate = '';
   String _currentTime = '';
+  List<Map<String, dynamic>> _recentActivity = [];
+  late TabController _tabController;
 
   @override
   void initState() {
     super.initState();
     _fetchUserData();
     _fetchAttendanceStatus();
+    _fetchRecentActivity();
+    _tabController = TabController(length: 2, vsync: this);
 
     // Initialize date and time
     _updateDateTime();
@@ -42,6 +46,12 @@ class _DashboardViewState extends State<DashboardView> {
     Future.delayed(const Duration(seconds: 1), () {
       if (mounted) _updateDateTime();
     });
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
   }
 
   void _updateDateTime() {
@@ -114,6 +124,37 @@ class _DashboardViewState extends State<DashboardView> {
     }
   }
 
+  Future<void> _fetchRecentActivity() async {
+    try {
+      // Get the last 5 attendance records
+      final QuerySnapshot snapshot = await FirebaseFirestore.instance
+          .collection('employees')
+          .doc(widget.employeeId)
+          .collection('attendance')
+          .orderBy('date', descending: true)
+          .limit(5)
+          .get();
+
+      List<Map<String, dynamic>> activity = [];
+      for (var doc in snapshot.docs) {
+        Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+        activity.add({
+          'date': data['date'],
+          'checkIn': data['checkIn'],
+          'checkOut': data['checkOut'],
+          'workStatus': data['workStatus'],
+          'totalHours': data['totalHours'],
+        });
+      }
+
+      setState(() {
+        _recentActivity = activity;
+      });
+    } catch (e) {
+      print("Error fetching activity: $e");
+    }
+  }
+
   Future<void> _handleCheckInOut() async {
     try {
       // Get today's date in YYYY-MM-DD format for the document ID
@@ -134,6 +175,7 @@ class _DashboardViewState extends State<DashboardView> {
           'checkIn': Timestamp.fromDate(now),
           'checkOut': null,
           'workStatus': 'In Progress',
+          'totalHours': 0,
         }, SetOptions(merge: true));
 
         setState(() {
@@ -143,13 +185,16 @@ class _DashboardViewState extends State<DashboardView> {
 
         CustomSnackBar.successSnackBar("Checked in successfully at $_currentTime");
       } else {
+        // Calculate hours worked
+        double hoursWorked = _checkInTime != null
+            ? now.difference(_checkInTime!).inMinutes / 60
+            : 0;
+
         // Check Out
         await attendanceRef.update({
           'checkOut': Timestamp.fromDate(now),
           'workStatus': 'Completed',
-          'totalHours': _checkInTime != null
-              ? now.difference(_checkInTime!).inMinutes / 60
-              : 0,
+          'totalHours': hoursWorked,
         });
 
         setState(() {
@@ -159,6 +204,9 @@ class _DashboardViewState extends State<DashboardView> {
 
         CustomSnackBar.successSnackBar("Checked out successfully at $_currentTime");
       }
+
+      // Refresh activity list
+      _fetchRecentActivity();
     } catch (e) {
       CustomSnackBar.errorSnackBar("Error updating attendance: $e");
     }
@@ -207,25 +255,32 @@ class _DashboardViewState extends State<DashboardView> {
 
   @override
   Widget build(BuildContext context) {
+    // Set context for snackbar
+    if (CustomSnackBar.context == null) {
+      CustomSnackBar.context = context;
+    }
+
     return Scaffold(
+      backgroundColor: Colors.white,
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: accentColor))
-          : Container(
-        decoration: BoxDecoration(
-          color: _isDarkMode ? Colors.black : Colors.white,
-        ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              // Profile header
-              _buildProfileHeader(),
+          : SafeArea(
+        child: Column(
+          children: [
+            // Profile header
+            _buildProfileHeader(),
 
-              // Dashboard content
-              Expanded(
-                child: _buildDashboardContent(),
-              ),
-            ],
-          ),
+            // Date and time (without the yellow strip indicator)
+            _buildDateTimeWithoutStrip(),
+
+            // Status card
+            _buildStatusCard(),
+
+            // Tabs and content
+            Expanded(
+              child: _buildTabbedContent(),
+            ),
+          ],
         ),
       ),
     );
@@ -236,62 +291,24 @@ class _DashboardViewState extends State<DashboardView> {
     String designation = _userData?['designation'] ?? 'Employee';
     String? imageBase64 = _userData?['image'];
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            scaffoldTopGradientClr,
-            scaffoldBottomGradientClr,
-          ],
-        ),
-      ),
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
       child: Row(
         children: [
-          // User image
-          GestureDetector(
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => UserProfilePage(
-                    employeeId: widget.employeeId,
-                    userData: _userData!,
-                  ),
-                ),
-              );
-            },
-            child: Hero(
-              tag: 'profile-${widget.employeeId}',
-              child: CircleAvatar(
-                radius: 30,
-                backgroundColor: Colors.white.withOpacity(0.3),
-                child: imageBase64 != null
-                    ? ClipOval(
-                  child: Image.memory(
-                    base64Decode(imageBase64),
-                    fit: BoxFit.cover,
-                    width: 60,
-                    height: 60,
-                    errorBuilder: (context, error, stackTrace) {
-                      return const Icon(
-                        Icons.person,
-                        size: 30,
-                        color: Colors.white,
-                      );
-                    },
-                  ),
-                )
-                    : const Icon(
-                  Icons.person,
-                  size: 30,
-                  color: Colors.white,
-                ),
-              ),
-            ),
+          // Profile image
+          CircleAvatar(
+            radius: 25,
+            backgroundColor: Colors.grey.shade200,
+            backgroundImage: imageBase64 != null
+                ? MemoryImage(base64Decode(imageBase64))
+                : null,
+            child: imageBase64 == null
+                ? const Icon(Icons.person, color: Colors.grey)
+                : null,
           ),
+
           const SizedBox(width: 12),
+
           // User info
           Expanded(
             child: Column(
@@ -300,204 +317,387 @@ class _DashboardViewState extends State<DashboardView> {
                 Text(
                   'Welcome back,',
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.8),
+                    color: Colors.grey.shade600,
                     fontSize: 14,
                   ),
                 ),
                 Text(
                   name.toUpperCase(),
                   style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
+                    fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
                 Text(
                   designation,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.8),
+                    color: Colors.grey.shade600,
                     fontSize: 14,
                   ),
                 ),
               ],
             ),
           ),
+
           // Settings icon
           IconButton(
-            icon: const Icon(Icons.settings, color: Colors.white),
-            onPressed: () {
-              _showComingSoonDialog('Settings');
-            },
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () {},
           ),
         ],
       ),
     );
   }
 
-  Widget _buildDashboardContent() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildDateTimeWithoutStrip() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
         children: [
-          const SizedBox(height: 20),
-
-          // Date and time
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _formattedDate,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: _isDarkMode ? Colors.white : Colors.black87,
-                    ),
-                  ),
-                  Text(
-                    _currentTime,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: _isDarkMode ? Colors.white70 : Colors.black54,
-                    ),
-                  ),
-                ],
-              ),
-              // Attendance status
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: _isCheckedIn ? Colors.green.withOpacity(0.1) : Colors.orange.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: _isCheckedIn ? Colors.green : Colors.orange,
-                    width: 1,
-                  ),
-                ),
-                child: Text(
-                  _isCheckedIn ? "Checked In" : "Not Checked In",
-                  style: TextStyle(
-                    color: _isCheckedIn ? Colors.green : Colors.orange,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 30),
-
-          // Check-in/Check-out button
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _handleCheckInOut,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _isCheckedIn ? Colors.redAccent : accentColor,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: Text(
-                _isCheckedIn ? "CHECK OUT" : "CHECK IN",
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
+          Icon(Icons.calendar_today, size: 16, color: Colors.grey.shade600),
+          const SizedBox(width: 8),
+          Text(
+            _formattedDate,
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey.shade700,
             ),
           ),
-
-          if (_isCheckedIn) ...[
-            const SizedBox(height: 10),
-            Center(
-              child: Text(
-                "Checked in at ${_checkInTime != null ? DateFormat('h:mm a').format(_checkInTime!) : ''}",
-                style: TextStyle(
-                  color: _isDarkMode ? Colors.white70 : Colors.black54,
-                  fontSize: 14,
-                ),
-              ),
-            ),
-          ],
-
-          const SizedBox(height: 30),
-
-          // Menu options
-          _buildMenuOption(
-            icon: Icons.person_outline,
-            title: 'Profile details',
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => UserProfilePage(
-                    employeeId: widget.employeeId,
-                    userData: _userData!,
-                  ),
-                ),
-              );
-            },
-          ),
-
-          _buildMenuOption(
-            icon: Icons.dark_mode_outlined,
-            title: 'Dark mode',
-            hasToggle: true,
-            toggleValue: _isDarkMode,
-            onToggleChanged: (value) {
-              setState(() {
-                _isDarkMode = value;
-              });
-            },
-          ),
-
-          _buildMenuOption(
-            icon: Icons.settings_outlined,
-            title: 'Settings',
-            onTap: () {
-              _showComingSoonDialog('Settings');
-            },
-          ),
-
-          _buildMenuOption(
-            icon: Icons.logout,
-            title: 'Log out',
-            textColor: Colors.red,
-            iconColor: Colors.red,
-            onTap: _logout,
-          ),
-
           const Spacer(),
-
-          // Additional features coming soon
-          Center(
-            child: Column(
-              children: [
-                SvgPicture.asset(
-                  'assets/images/under_development.svg',
-                  height: 120,
-                  width: 120,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Additional features coming soon!',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                    color: _isDarkMode ? Colors.white70 : Colors.black54,
-                  ),
-                ),
-                const SizedBox(height: 30),
-              ],
+          Icon(Icons.access_time, size: 16, color: Colors.grey.shade600),
+          const SizedBox(width: 4),
+          Text(
+            _currentTime,
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey.shade700,
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildStatusCard() {
+    return Container(
+      margin: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF8D8AD3), // Purple background as shown in your screenshot
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Status information
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                // Left side - Status text
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "Today's Status",
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.8),
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      "Not Started",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+
+                // Right side - Status indicator (Not checked in)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.info_outline,
+                        color: Colors.white,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 4),
+                      const Text(
+                        "Not checked in",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Check In button
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton(
+                onPressed: _handleCheckInOut,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF4CAF50), // Green button
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  elevation: 0,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    SvgPicture.asset(
+                      _isCheckedIn ? 'assets/images/logout.svg' : 'assets/images/checkin.svg',
+                      width: 24,
+                      height: 24,
+                      colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      _isCheckedIn ? "CHECK OUT" : "CHECK IN",
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTabbedContent() {
+    return Column(
+      children: [
+        // Tab bar
+        TabBar(
+          controller: _tabController,
+          labelColor: accentColor,
+          unselectedLabelColor: Colors.grey,
+          indicatorColor: accentColor,
+          tabs: const [
+            Tab(text: "Recent Activity"),
+            Tab(text: "Menu"),
+          ],
+        ),
+
+        // Tab content
+        Expanded(
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              _buildRecentActivityTab(),
+              _buildMenuTab(),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRecentActivityTab() {
+    // Show empty state with your specific NODATA.svg asset
+    if (_recentActivity.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SvgPicture.asset(
+              'assets/images/NODATA.svg', // Your specific asset
+              height: 120,
+              width: 120,
+              placeholderBuilder: (context) => Icon(
+                Icons.calendar_today_outlined,
+                size: 80,
+                color: Colors.grey.shade300,
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              "No activity records found",
+              style: TextStyle(
+                color: Colors.grey,
+                fontSize: 16,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Show activity list if data exists
+    return ListView.builder(
+      padding: const EdgeInsets.all(10),
+      itemCount: _recentActivity.length,
+      itemBuilder: (context, index) {
+        // Activity list item implementation
+        Map<String, dynamic> activity = _recentActivity[index];
+        String date = activity['date'] ?? 'Unknown';
+        DateTime? checkIn = activity['checkIn'] != null
+            ? (activity['checkIn'] as Timestamp).toDate()
+            : null;
+        DateTime? checkOut = activity['checkOut'] != null
+            ? (activity['checkOut'] as Timestamp).toDate()
+            : null;
+        String status = activity['workStatus'] ?? 'Unknown';
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.grey.shade200),
+          ),
+          child: ListTile(
+            title: Text(
+              _formatDisplayDate(date),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Text(
+                      checkIn != null
+                          ? 'In: ${DateFormat('h:mm a').format(checkIn)}'
+                          : 'Not checked in',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    ),
+                    const SizedBox(width: 16),
+                    Text(
+                      checkOut != null
+                          ? 'Out: ${DateFormat('h:mm a').format(checkOut)}'
+                          : 'Not checked out',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            trailing: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: _getStatusColor(status).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                status,
+                style: TextStyle(
+                  color: _getStatusColor(status),
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMenuTab() {
+    return ListView(
+      padding: const EdgeInsets.all(10),
+      children: [
+        _buildMenuOption(
+          icon: Icons.person_outline,
+          title: 'Profile details',
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => UserProfilePage(
+                  employeeId: widget.employeeId,
+                  userData: _userData!,
+                ),
+              ),
+            );
+          },
+        ),
+
+        _buildMenuOption(
+          icon: Icons.dark_mode_outlined,
+          title: 'Dark mode',
+          hasToggle: true,
+          toggleValue: _isDarkMode,
+          onToggleChanged: (value) {
+            setState(() {
+              _isDarkMode = value;
+            });
+          },
+        ),
+
+        _buildMenuOption(
+          icon: Icons.settings_outlined,
+          title: 'Settings',
+          onTap: () {
+            _showComingSoonDialog('Settings');
+          },
+        ),
+
+        _buildMenuOption(
+          icon: Icons.logout,
+          title: 'Log out',
+          textColor: Colors.red,
+          iconColor: Colors.red,
+          onTap: _logout,
+        ),
+
+        const SizedBox(height: 20),
+
+        // Coming soon section
+        Center(
+          child: Column(
+            children: [
+              SvgPicture.asset(
+                'assets/images/under_development.svg',
+                height: 60,
+                width: 60,
+                placeholderBuilder: (context) => Icon(
+                  Icons.construction,
+                  size: 60,
+                  color: Colors.grey.shade300,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Additional features coming soon!',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.grey.shade600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -511,43 +711,110 @@ class _DashboardViewState extends State<DashboardView> {
     Color iconColor = Colors.black54,
     Color textColor = Colors.black87,
   }) {
-    return InkWell(
-      onTap: hasToggle ? null : onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              color: _isDarkMode ? Colors.white70 : iconColor,
-              size: 24,
-            ),
-            const SizedBox(width: 16),
-            Text(
-              title,
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-                color: _isDarkMode ? Colors.white : textColor,
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: Colors.grey.shade200,
+        ),
+      ),
+      child: InkWell(
+        onTap: hasToggle ? null : onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.grey.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  icon,
+                  color: iconColor,
+                  size: 22,
+                ),
               ),
-            ),
-            const Spacer(),
-            if (hasToggle)
-              Switch(
-                value: toggleValue,
-                onChanged: onToggleChanged,
-                activeColor: accentColor,
-              )
-            else
-              Icon(
-                Icons.arrow_forward_ios,
-                size: 16,
-                color: _isDarkMode ? Colors.white30 : Colors.black38,
+              const SizedBox(width: 16),
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                  color: textColor,
+                ),
               ),
-          ],
+              const Spacer(),
+              if (hasToggle)
+                Switch(
+                  value: toggleValue,
+                  onChanged: onToggleChanged,
+                  activeColor: accentColor,
+                )
+              else
+                const Icon(
+                  Icons.arrow_forward_ios,
+                  size: 16,
+                  color: Colors.grey,
+                ),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  String _formatDisplayDate(String dateStr) {
+    try {
+      // Assuming dateStr is in format yyyy-MM-dd
+      DateTime date = DateFormat('yyyy-MM-dd').parse(dateStr);
+
+      // If it's today
+      if (DateFormat('yyyy-MM-dd').format(DateTime.now()) == dateStr) {
+        return 'Today';
+      }
+
+      // If it's yesterday
+      DateTime yesterday = DateTime.now().subtract(const Duration(days: 1));
+      if (DateFormat('yyyy-MM-dd').format(yesterday) == dateStr) {
+        return 'Yesterday';
+      }
+
+      // Otherwise return formatted date
+      return DateFormat('MMM d, yyyy').format(date);
+    } catch (e) {
+      return dateStr; // Return original if parsing fails
+    }
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'completed':
+        return Colors.green;
+      case 'in progress':
+        return Colors.blue;
+      case 'pending':
+        return Colors.orange;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  IconData _getStatusIcon(String status) {
+    switch (status.toLowerCase()) {
+      case 'completed':
+        return Icons.check_circle;
+      case 'in progress':
+        return Icons.access_time;
+      case 'pending':
+        return Icons.hourglass_empty;
+      default:
+        return Icons.circle;
+    }
   }
 
   void _showComingSoonDialog(String feature) {
@@ -555,11 +822,31 @@ class _DashboardViewState extends State<DashboardView> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Coming Soon'),
-        content: Text('The $feature feature is coming soon!'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SvgPicture.asset(
+              'assets/images/under_development.svg',
+              height: 100,
+              width: 100,
+              placeholderBuilder: (context) => Icon(
+                Icons.construction,
+                size: 80,
+                color: Colors.grey.shade400,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'The $feature feature is coming soon!',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 16),
+            ),
+          ],
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('OK'),
+            child: const Text('OK', style: TextStyle(color: accentColor)),
           ),
         ],
       ),
