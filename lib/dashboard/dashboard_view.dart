@@ -15,6 +15,13 @@ import 'package:intl/intl.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:face_auth_compatible/model/location_model.dart';
 
+// New imports for offline functionality
+import 'package:face_auth_compatible/services/connectivity_service.dart';
+import 'package:face_auth_compatible/common/widgets/connectivity_banner.dart';
+import 'package:face_auth_compatible/repositories/attendance_repository.dart';
+import 'package:face_auth_compatible/repositories/location_repository.dart';
+import 'package:face_auth_compatible/services/sync_service.dart';
+
 class DashboardView extends StatefulWidget {
   final String employeeId;
 
@@ -45,10 +52,41 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   // Authentication related variables
   bool _isAuthenticating = false;
 
+  // New variables for offline support
+  late ConnectivityService _connectivityService;
+  late AttendanceRepository _attendanceRepository;
+  late LocationRepository _locationRepository;
+  late SyncService _syncService;
+  bool _needsSync = false;
+
   @override
   void initState() {
     super.initState();
     _loadDarkModePreference();
+
+    // Initialize services for offline support
+    _connectivityService = ConnectivityService();
+    _attendanceRepository = AttendanceRepository();
+    _locationRepository = LocationRepository();
+    _syncService = SyncService();
+    _syncService.initialize();
+
+    // Listen to connectivity changes to show sync status
+    _connectivityService.connectionStatusStream.listen((status) {
+      if (status == ConnectionStatus.online && _needsSync) {
+        _syncService.syncData().then((_) {
+          // Refresh data after sync
+          _fetchUserData();
+          _fetchAttendanceStatus();
+          _fetchRecentActivity();
+          setState(() {
+            _needsSync = false;
+          });
+        });
+      }
+    });
+
+    // Continue with normal initialization
     _fetchUserData();
     _fetchAttendanceStatus();
     _fetchRecentActivity();
@@ -69,6 +107,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   @override
   void dispose() {
     _tabController.dispose();
+    _syncService.dispose();
     super.dispose();
   }
 
@@ -99,7 +138,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     }
   }
 
-  // Check if user is within geofence
+  // Check if user is within geofence - updated for offline support
   Future<void> _checkGeofenceStatus() async {
     if (!mounted) return;
 
@@ -114,15 +153,18 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
         timeLimit: const Duration(seconds: 10),
       );
 
+      // Use the repository instead of the util directly
+      List<LocationModel> locations = await _locationRepository.getActiveLocations();
+
       // Get detailed geofence status with all locations
-      Map<String, dynamic> status = await GeofenceUtil.checkGeofenceStatus(context);
+      Map<String, dynamic> status = await GeofenceUtil.checkGeofenceStatusWithLocations(
+          context,
+          locations
+      );
 
       bool withinGeofence = status['withinGeofence'] as bool;
       LocationModel? nearestLocation = status['location'] as LocationModel?;
       double? distance = status['distance'] as double?;
-
-      // Get all available locations for the status card
-      List<LocationModel> locations = await GeofenceUtil.getActiveLocations(context);
 
       if (mounted) {
         setState(() {
@@ -146,21 +188,43 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
 
   Future<void> _fetchUserData() async {
     try {
-      DocumentSnapshot snapshot = await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(widget.employeeId)
-          .get();
+      // Check if we're online
+      if (_connectivityService.currentStatus == ConnectionStatus.online) {
+        // Fetch from Firestore
+        DocumentSnapshot snapshot = await FirebaseFirestore.instance
+            .collection('employees')
+            .doc(widget.employeeId)
+            .get();
 
-      if (snapshot.exists) {
-        setState(() {
-          _userData = snapshot.data() as Map<String, dynamic>;
-          _isLoading = false;
-        });
+        if (snapshot.exists) {
+          // Save to local database for offline access
+          Map<String, dynamic> data = snapshot.data() as Map<String, dynamic>;
+          await _saveUserDataLocally(data);
+
+          setState(() {
+            _userData = data;
+            _isLoading = false;
+          });
+        } else {
+          setState(() {
+            _isLoading = false;
+          });
+          CustomSnackBar.errorSnackBar("User data not found");
+        }
       } else {
-        setState(() {
-          _isLoading = false;
-        });
-        CustomSnackBar.errorSnackBar("User data not found");
+        // Offline mode - get from local storage
+        Map<String, dynamic>? userData = await _getUserDataLocally();
+        if (userData != null) {
+          setState(() {
+            _userData = userData;
+            _isLoading = false;
+          });
+        } else {
+          setState(() {
+            _isLoading = false;
+          });
+          CustomSnackBar.errorSnackBar("No cached user data available");
+        }
       }
     } catch (e) {
       setState(() {
@@ -170,59 +234,177 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     }
   }
 
+  // New method to save user data locally
+  Future<void> _saveUserDataLocally(Map<String, dynamic> userData) async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setString('user_data_${widget.employeeId}', jsonEncode(userData));
+    } catch (e) {
+      debugPrint('Error saving user data locally: $e');
+    }
+  }
+
+  // New method to get user data from local storage
+  Future<Map<String, dynamic>?> _getUserDataLocally() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      String? userData = prefs.getString('user_data_${widget.employeeId}');
+      if (userData != null) {
+        return jsonDecode(userData) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      debugPrint('Error getting user data locally: $e');
+    }
+    return null;
+  }
+
   Future<void> _fetchAttendanceStatus() async {
     try {
       // Get today's date in YYYY-MM-DD format for the document ID
       String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
 
-      DocumentSnapshot attendanceDoc = await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(widget.employeeId)
-          .collection('attendance')
-          .doc(today)
-          .get();
+      if (_connectivityService.currentStatus == ConnectionStatus.online) {
+        // Online mode - fetch from Firestore
+        DocumentSnapshot attendanceDoc = await FirebaseFirestore.instance
+            .collection('employees')
+            .doc(widget.employeeId)
+            .collection('attendance')
+            .doc(today)
+            .get();
 
-      if (attendanceDoc.exists) {
-        Map<String, dynamic> data = attendanceDoc.data() as Map<String, dynamic>;
-        setState(() {
-          _isCheckedIn = data['checkIn'] != null;
-          if (_isCheckedIn) {
-            _checkInTime = (data['checkIn'] as Timestamp).toDate();
-          }
-        });
+        if (attendanceDoc.exists) {
+          Map<String, dynamic> data = attendanceDoc.data() as Map<String, dynamic>;
+          setState(() {
+            _isCheckedIn = data['checkIn'] != null;
+            if (_isCheckedIn) {
+              _checkInTime = (data['checkIn'] as Timestamp).toDate();
+            }
+          });
+
+          // Cache the attendance status
+          await _saveAttendanceStatusLocally(today, data);
+        } else {
+          setState(() {
+            _isCheckedIn = false;
+            _checkInTime = null;
+          });
+
+          // Clear cached status for today
+          await _clearAttendanceStatusLocally(today);
+        }
       } else {
-        setState(() {
-          _isCheckedIn = false;
-          _checkInTime = null;
-        });
+        // Offline mode - check local storage
+        Map<String, dynamic>? attendanceData = await _getAttendanceStatusLocally(today);
+        if (attendanceData != null) {
+          setState(() {
+            _isCheckedIn = attendanceData['checkIn'] != null;
+            if (_isCheckedIn && attendanceData['checkIn'] != null) {
+              _checkInTime = DateTime.parse(attendanceData['checkIn']);
+            }
+          });
+        } else {
+          // Check database for pending records
+          final localAttendance = await _attendanceRepository.getTodaysAttendance(widget.employeeId);
+          if (localAttendance != null) {
+            setState(() {
+              _isCheckedIn = localAttendance.checkIn != null;
+              if (_isCheckedIn && localAttendance.checkIn != null) {
+                _checkInTime = DateTime.parse(localAttendance.checkIn!);
+              }
+            });
+          } else {
+            setState(() {
+              _isCheckedIn = false;
+              _checkInTime = null;
+            });
+          }
+        }
       }
     } catch (e) {
       print("Error fetching attendance: $e");
     }
   }
 
+  // New method to save attendance status locally
+  Future<void> _saveAttendanceStatusLocally(String date, Map<String, dynamic> data) async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      // Convert Timestamp to ISO string for storage
+      if (data['checkIn'] != null && data['checkIn'] is Timestamp) {
+        data['checkIn'] = (data['checkIn'] as Timestamp).toDate().toIso8601String();
+      }
+      if (data['checkOut'] != null && data['checkOut'] is Timestamp) {
+        data['checkOut'] = (data['checkOut'] as Timestamp).toDate().toIso8601String();
+      }
+      await prefs.setString('attendance_${widget.employeeId}_$date', jsonEncode(data));
+    } catch (e) {
+      debugPrint('Error saving attendance status locally: $e');
+    }
+  }
+
+  // New method to get attendance status from local storage
+  Future<Map<String, dynamic>?> _getAttendanceStatusLocally(String date) async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      String? attendanceData = prefs.getString('attendance_${widget.employeeId}_$date');
+      if (attendanceData != null) {
+        return jsonDecode(attendanceData) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      debugPrint('Error getting attendance status locally: $e');
+    }
+    return null;
+  }
+
+  // New method to clear attendance status from local storage
+  Future<void> _clearAttendanceStatusLocally(String date) async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.remove('attendance_${widget.employeeId}_$date');
+    } catch (e) {
+      debugPrint('Error clearing attendance status locally: $e');
+    }
+  }
+
   Future<void> _fetchRecentActivity() async {
     try {
-      // Get the last 5 attendance records
-      final QuerySnapshot snapshot = await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(widget.employeeId)
-          .collection('attendance')
-          .orderBy('date', descending: true)
-          .limit(5)
-          .get();
-
       List<Map<String, dynamic>> activity = [];
-      for (var doc in snapshot.docs) {
-        Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
-        activity.add({
-          'date': data['date'],
-          'checkIn': data['checkIn'],
-          'checkOut': data['checkOut'],
-          'workStatus': data['workStatus'],
-          'totalHours': data['totalHours'],
-          'location': data['location'] ?? 'Unknown',
-        });
+
+      if (_connectivityService.currentStatus == ConnectionStatus.online) {
+        // Online mode - fetch from Firestore
+        final QuerySnapshot snapshot = await FirebaseFirestore.instance
+            .collection('employees')
+            .doc(widget.employeeId)
+            .collection('attendance')
+            .orderBy('date', descending: true)
+            .limit(5)
+            .get();
+
+        for (var doc in snapshot.docs) {
+          Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+          activity.add({
+            'date': data['date'],
+            'checkIn': data['checkIn'],
+            'checkOut': data['checkOut'],
+            'workStatus': data['workStatus'],
+            'totalHours': data['totalHours'],
+            'location': data['location'] ?? 'Unknown',
+          });
+        }
+
+        // Cache recent activity
+        await _saveRecentActivityLocally(activity);
+      } else {
+        // Offline mode - get from local storage
+        activity = await _getRecentActivityLocally() ?? [];
+
+        // If no cached data, try to get from local database
+        if (activity.isEmpty) {
+          final localRecords = await _attendanceRepository.getRecentAttendance(widget.employeeId, 5);
+          for (var record in localRecords) {
+            activity.add(record.rawData);
+          }
+        }
       }
 
       setState(() {
@@ -231,6 +413,44 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     } catch (e) {
       print("Error fetching activity: $e");
     }
+  }
+
+  // New method to save recent activity locally
+  Future<void> _saveRecentActivityLocally(List<Map<String, dynamic>> activity) async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+
+      // Process timestamps to ISO strings for storage
+      final processedActivity = activity.map((item) {
+        final processedItem = Map<String, dynamic>.from(item);
+        if (processedItem['checkIn'] != null && processedItem['checkIn'] is Timestamp) {
+          processedItem['checkIn'] = (processedItem['checkIn'] as Timestamp).toDate().toIso8601String();
+        }
+        if (processedItem['checkOut'] != null && processedItem['checkOut'] is Timestamp) {
+          processedItem['checkOut'] = (processedItem['checkOut'] as Timestamp).toDate().toIso8601String();
+        }
+        return processedItem;
+      }).toList();
+
+      await prefs.setString('recent_activity_${widget.employeeId}', jsonEncode(processedActivity));
+    } catch (e) {
+      debugPrint('Error saving recent activity locally: $e');
+    }
+  }
+
+  // New method to get recent activity from local storage
+  Future<List<Map<String, dynamic>>?> _getRecentActivityLocally() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      String? activityData = prefs.getString('recent_activity_${widget.employeeId}');
+      if (activityData != null) {
+        final List<dynamic> decoded = jsonDecode(activityData);
+        return decoded.map((item) => item as Map<String, dynamic>).toList();
+      }
+    } catch (e) {
+      debugPrint('Error getting recent activity locally: $e');
+    }
+    return null;
   }
 
   Future<void> _handleCheckInOut() async {
@@ -282,8 +502,37 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                     Navigator.of(context).pop();
 
                     if (success) {
-                      // If authentication successful, proceed with check-in
-                      _completeCheckIn();
+                      // Get current position
+                      Position? currentPosition = await GeofenceUtil.getCurrentPosition();
+
+                      // If authentication successful, proceed with check-in using repository
+                      bool checkInSuccess = await _attendanceRepository.recordCheckIn(
+                        employeeId: widget.employeeId,
+                        checkInTime: DateTime.now(),
+                        locationId: _nearestLocation?.id ?? 'default',
+                        locationName: _nearestLocation?.name ?? 'Unknown',
+                        locationLat: currentPosition?.latitude ?? _nearestLocation!.latitude,
+                        locationLng: currentPosition?.longitude ?? _nearestLocation!.longitude,
+                      );
+
+                      if (checkInSuccess) {
+                        setState(() {
+                          _isCheckedIn = true;
+                          _checkInTime = DateTime.now();
+
+                          // If offline, mark that we need to sync later
+                          if (_connectivityService.currentStatus == ConnectionStatus.offline) {
+                            _needsSync = true;
+                          }
+                        });
+
+                        CustomSnackBar.successSnackBar("Checked in successfully at $_currentTime");
+
+                        // Refresh activity list
+                        _fetchRecentActivity();
+                      } else {
+                        CustomSnackBar.errorSnackBar("Failed to record check-in. Please try again.");
+                      }
                     } else {
                       // If authentication failed, show error message
                       CustomSnackBar.errorSnackBar("Face authentication failed. Check-in canceled.");
@@ -332,8 +581,30 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                     Navigator.of(context).pop();
 
                     if (success) {
-                      // If authentication successful, proceed with check-out
-                      _completeCheckOut();
+                      // If authentication successful, proceed with check-out using repository
+                      bool checkOutSuccess = await _attendanceRepository.recordCheckOut(
+                        employeeId: widget.employeeId,
+                        checkOutTime: DateTime.now(),
+                      );
+
+                      if (checkOutSuccess) {
+                        setState(() {
+                          _isCheckedIn = false;
+                          _checkInTime = null;
+
+                          // If offline, mark that we need to sync later
+                          if (_connectivityService.currentStatus == ConnectionStatus.offline) {
+                            _needsSync = true;
+                          }
+                        });
+
+                        CustomSnackBar.successSnackBar("Checked out successfully at $_currentTime");
+
+                        // Refresh activity list
+                        _fetchRecentActivity();
+                      } else {
+                        CustomSnackBar.errorSnackBar("Failed to record check-out. Please try again.");
+                      }
                     } else {
                       // If authentication failed, show error message
                       CustomSnackBar.errorSnackBar("Face authentication failed. Check-out canceled.");
@@ -355,116 +626,32 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     }
   }
 
-  // New method to complete check-in process after successful face auth
-  Future<void> _completeCheckIn() async {
-    try {
-      setState(() => _isLoading = true);
-
-      // Get today's date in YYYY-MM-DD format for the document ID
-      String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
-      DateTime now = DateTime.now();
-
-      // Get current position for logging
-      Position? currentPosition = await GeofenceUtil.getCurrentPosition();
-
-      // Reference to today's attendance document
-      DocumentReference attendanceRef = FirebaseFirestore.instance
-          .collection('employees')
-          .doc(widget.employeeId)
-          .collection('attendance')
-          .doc(today);
-
-      // Check In data
-      Map<String, dynamic> checkInData = {
-        'date': today,
-        'checkIn': Timestamp.fromDate(now),
-        'checkOut': null,
-        'workStatus': 'In Progress',
-        'totalHours': 0,
-        'location': _nearestLocation?.name ?? 'Unknown',
-        'locationId': _nearestLocation?.id ?? 'default',
-        'address': _nearestLocation?.address ?? 'Unknown',
-        'isWithinGeofence': true,
-      };
-
-      // Add location coordinates if available
-      if (currentPosition != null) {
-        checkInData['locationLat'] = currentPosition.latitude;
-        checkInData['locationLng'] = currentPosition.longitude;
-        checkInData['locationAccuracy'] = currentPosition.accuracy;
-      }
-
-      await attendanceRef.set(checkInData, SetOptions(merge: true));
-
-      setState(() {
-        _isCheckedIn = true;
-        _checkInTime = now;
-        _isLoading = false;
-      });
-
-      CustomSnackBar.successSnackBar("Checked in successfully at $_currentTime");
-
-      // Refresh activity list
-      _fetchRecentActivity();
-    } catch (e) {
-      setState(() => _isLoading = false);
-      CustomSnackBar.errorSnackBar("Error updating attendance: $e");
-      debugPrint('CheckIn Error: $e');
+  // Manual sync trigger for UI
+  Future<void> _manualSync() async {
+    if (_connectivityService.currentStatus == ConnectionStatus.offline) {
+      CustomSnackBar.errorSnackBar("Cannot sync while offline. Please check your connection.");
+      return;
     }
-  }
 
-  // New method to handle check-out process
-  Future<void> _completeCheckOut() async {
+    setState(() => _isLoading = true);
+
     try {
-      setState(() => _isLoading = true);
+      await _syncService.manualSync();
 
-      // Get today's date in YYYY-MM-DD format for the document ID
-      String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
-      DateTime now = DateTime.now();
-
-      // Calculate hours worked
-      double hoursWorked = _checkInTime != null
-          ? now.difference(_checkInTime!).inMinutes / 60
-          : 0;
-
-      // Get current position for logging
-      Position? currentPosition = await GeofenceUtil.getCurrentPosition();
-
-      // Reference to today's attendance document
-      DocumentReference attendanceRef = FirebaseFirestore.instance
-          .collection('employees')
-          .doc(widget.employeeId)
-          .collection('attendance')
-          .doc(today);
-
-      Map<String, dynamic> checkOutData = {
-        'checkOut': Timestamp.fromDate(now),
-        'workStatus': 'Completed',
-        'totalHours': hoursWorked,
-      };
-
-      // Add location coordinates if available
-      if (currentPosition != null) {
-        checkOutData['checkoutLocationLat'] = currentPosition.latitude;
-        checkOutData['checkoutLocationLng'] = currentPosition.longitude;
-      }
-
-      await attendanceRef.update(checkOutData);
+      // Refresh all data after sync
+      await _fetchUserData();
+      await _fetchAttendanceStatus();
+      await _fetchRecentActivity();
 
       setState(() {
-        _isCheckedIn = false;
-        _checkInTime = null;
+        _needsSync = false;
         _isLoading = false;
       });
 
-      CustomSnackBar.successSnackBar("Checked out successfully at $_currentTime");
-
-      // Refresh activity list
-      _fetchRecentActivity();
+      CustomSnackBar.successSnackBar("Data synchronized successfully");
     } catch (e) {
       setState(() => _isLoading = false);
-      CustomSnackBar.errorSnackBar("Error updating attendance: $e");
-      debugPrint('CheckOut Error: $e');
+      CustomSnackBar.errorSnackBar("Error during sync: $e");
     }
   }
 
@@ -490,6 +677,31 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
 
     if (confirm) {
       try {
+        // If we have pending syncs, prompt to sync first
+        if (_needsSync && _connectivityService.currentStatus == ConnectionStatus.online) {
+          bool syncFirst = await showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text("Unsynchronized Data"),
+              content: const Text("You have data that hasn't been synchronized. Would you like to sync before logging out?"),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text("No"),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text("Yes"),
+                ),
+              ],
+            ),
+          ) ?? false;
+
+          if (syncFirst) {
+            await _manualSync();
+          }
+        }
+
         // Clear any local authentication tokens/flags
         SharedPreferences prefs = await SharedPreferences.getInstance();
         await prefs.remove('authenticated_user_id');
@@ -520,31 +732,81 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       backgroundColor: _isDarkMode ? const Color(0xFF121212) : Colors.white,
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: accentColor))
-          : SafeArea(
-        child: Column(
-          children: [
-            // Profile header
-            _buildProfileHeader(),
+          : Column(
+        children: [
+          // Add connectivity banner at the top
+          ConnectivityBanner(connectivityService: _connectivityService),
 
-            // Date and time
-            _buildDateTimeWithoutStrip(),
-
-            // Status card
-            _buildStatusCard(),
-
-            // Tabs and content
-            Expanded(
-              child: _buildTabbedContent(),
+          // Add sync status banner if needed
+          if (_needsSync && _connectivityService.currentStatus == ConnectionStatus.online)
+            GestureDetector(
+              onTap: _manualSync,
+              child: Container(
+                color: Colors.orange,
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.sync, color: Colors.white, size: 16),
+                    SizedBox(width: 8),
+                    Text(
+                      'Tap to synchronize pending data',
+                      style: TextStyle(color: Colors.white, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ],
-        ),
+
+          Expanded(
+            child: SafeArea(
+              child: Column(
+                children: [
+                  // Profile header
+                  _buildProfileHeader(),
+
+                  // Date and time
+                  _buildDateTimeWithoutStrip(),
+
+                  // Status card
+                  _buildStatusCard(),
+
+                  // Tabs and content
+                  Expanded(
+                    child: _buildTabbedContent(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
       // Add floating action button to refresh geofence status
-      floatingActionButton: FloatingActionButton(
-        onPressed: _checkGeofenceStatus,
-        tooltip: 'Refresh Location',
-        backgroundColor: accentColor,
-        child: const Icon(Icons.refresh_rounded),
+      floatingActionButton: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          // Add sync button if we have pending data to sync
+          if (_needsSync && _connectivityService.currentStatus == ConnectionStatus.online)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: FloatingActionButton(
+                onPressed: _manualSync,
+                tooltip: 'Sync Data',
+                backgroundColor: Colors.orange,
+                heroTag: 'syncButton',
+                child: const Icon(Icons.sync),
+              ),
+            ),
+
+          // Regular location refresh button
+          FloatingActionButton(
+            onPressed: _checkGeofenceStatus,
+            tooltip: 'Refresh Location',
+            backgroundColor: accentColor,
+            heroTag: 'locationButton',
+            child: const Icon(Icons.refresh_rounded),
+          ),
+        ],
       ),
     );
   }
@@ -622,39 +884,39 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
 
   Widget _buildDateTimeWithoutStrip() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      color: _isDarkMode ? const Color(0xFF1E1E1E) : Colors.white,
-      child: Row(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        color: _isDarkMode ? const Color(0xFF1E1E1E) : Colors.white,
+        child: Row(
         children: [
-          Icon(
-              Icons.calendar_today,
-              size: 16,
-              color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600
-          ),
-          const SizedBox(width: 8),
-          Text(
-            _formattedDate,
-            style: TextStyle(
-              fontSize: 14,
-              color: _isDarkMode ? Colors.grey.shade300 : Colors.grey.shade700,
-            ),
-          ),
-          const Spacer(),
-          Icon(
-              Icons.access_time,
-              size: 16,
-              color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600
-          ),
-          const SizedBox(width: 4),
-          Text(
-            _currentTime,
-            style: TextStyle(
-              fontSize: 14,
-              color: _isDarkMode ? Colors.grey.shade300 : Colors.grey.shade700,
-            ),
-          ),
-        ],
-      ),
+        Icon(
+        Icons.calendar_today,
+        size: 16,
+        color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600
+    ),
+    const SizedBox(width: 8),
+    Text(
+    _formattedDate,
+    style: TextStyle(
+    fontSize: 14,
+    color: _isDarkMode ? Colors.grey.shade300 : Colors.grey.shade700,
+    ),
+    ),
+    const Spacer(),
+    Icon(
+    Icons.access_time,
+    size: 16,
+    color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600
+    ),
+    const SizedBox(width: 4),
+    Text(
+    _currentTime,
+    style: TextStyle(
+    fontSize: 14,
+    color: _isDarkMode ? Colors.grey.shade300 : Colors.grey.shade700,
+    ),
+    ),
+    ],
+        ),
     );
   }
 
@@ -745,6 +1007,30 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
               ],
             ),
           ),
+
+          // Offline badge if record hasn't been synced
+          if (_needsSync && _isCheckedIn)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.sync_disabled, color: Colors.orange, size: 14),
+                    SizedBox(width: 4),
+                    Text(
+                      "Pending sync",
+                      style: TextStyle(color: Colors.orange, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
 
           // Geofence status indicator with location name
           Padding(
@@ -937,29 +1223,43 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       return Container(
         color: bgColor,
         child: Center(
-        child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          SvgPicture.asset(
-            'assets/images/NODATA.svg', // Your specific asset
-            height: 120,
-            width: 120,
-            placeholderBuilder: (context) => Icon(
-              Icons.calendar_today_outlined,
-              size: 80,
-              color: _isDarkMode ? Colors.grey.shade700 : Colors.grey.shade300,
-            ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              SvgPicture.asset(
+                'assets/images/NODATA.svg', // Your specific asset
+                height: 120,
+                width: 120,
+                placeholderBuilder: (context) => Icon(
+                  Icons.calendar_today_outlined,
+                  size: 80,
+                  color: _isDarkMode ? Colors.grey.shade700 : Colors.grey.shade300,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                "No activity records found",
+                style: TextStyle(
+                  color: _isDarkMode ? Colors.grey.shade400 : Colors.grey,
+                  fontSize: 16,
+                ),
+              ),
+              // Add a button to sync data if we're offline and have data to sync
+              if (_needsSync && _connectivityService.currentStatus == ConnectionStatus.online)
+                Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child: ElevatedButton.icon(
+                    onPressed: _manualSync,
+                    icon: const Icon(Icons.sync),
+                    label: const Text("Sync Data"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+            ],
           ),
-          const SizedBox(height: 16),
-          Text(
-            "No activity records found",
-            style: TextStyle(
-              color: _isDarkMode ? Colors.grey.shade400 : Colors.grey,
-              fontSize: 16,
-            ),
-          ),
-        ],
-      ),
         ),
       );
     }
@@ -974,14 +1274,31 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
           // Activity list item implementation
           Map<String, dynamic> activity = _recentActivity[index];
           String date = activity['date'] ?? 'Unknown';
-          DateTime? checkIn = activity['checkIn'] != null
-              ? (activity['checkIn'] as Timestamp).toDate()
-              : null;
-          DateTime? checkOut = activity['checkOut'] != null
-              ? (activity['checkOut'] as Timestamp).toDate()
-              : null;
+
+          // Handle both Timestamp and String (from cache) formats for checkIn/checkOut
+          DateTime? checkIn;
+          if (activity['checkIn'] != null) {
+            if (activity['checkIn'] is Timestamp) {
+              checkIn = (activity['checkIn'] as Timestamp).toDate();
+            } else if (activity['checkIn'] is String) {
+              checkIn = DateTime.parse(activity['checkIn']);
+            }
+          }
+
+          DateTime? checkOut;
+          if (activity['checkOut'] != null) {
+            if (activity['checkOut'] is Timestamp) {
+              checkOut = (activity['checkOut'] as Timestamp).toDate();
+            } else if (activity['checkOut'] is String) {
+              checkOut = DateTime.parse(activity['checkOut']);
+            }
+          }
+
           String status = activity['workStatus'] ?? 'Unknown';
           String location = activity['location'] ?? 'Unknown';
+
+          // Add sync status indicator for records that are not synced
+          bool isSynced = activity['isSynced'] ?? true;
 
           return Container(
             margin: const EdgeInsets.only(bottom: 8),
@@ -994,13 +1311,39 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
             ),
             child: ListTile(
               contentPadding: const EdgeInsets.all(12),
-              title: Text(
-                _formatDisplayDate(date),
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18,
-                  color: _isDarkMode ? Colors.white : Colors.black,
-                ),
+              title: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _formatDisplayDate(date),
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                        color: _isDarkMode ? Colors.white : Colors.black,
+                      ),
+                    ),
+                  ),
+                  // Show sync indicator if needed
+                  if (!isSynced)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.sync_disabled, color: Colors.orange, size: 12),
+                          SizedBox(width: 4),
+                          Text(
+                            "Pending",
+                            style: TextStyle(color: Colors.orange, fontSize: 10),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
               ),
               subtitle: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1109,12 +1452,50 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
             statusColor: _isWithinGeofence ? Colors.green : Colors.red,
           ),
 
+          // Add sync option for offline data
+          if (_needsSync)
+            _buildMenuOption(
+              icon: Icons.sync,
+              title: 'Sync Data',
+              subtitle: _connectivityService.currentStatus == ConnectionStatus.online
+                  ? 'You have pending data to synchronize'
+                  : 'Connect to network to sync data',
+              onTap: _connectivityService.currentStatus == ConnectionStatus.online
+                  ? _manualSync
+                  : null,
+              showStatusIcon: true,
+              statusIcon: _connectivityService.currentStatus == ConnectionStatus.online
+                  ? Icons.cloud_upload
+                  : Icons.cloud_off,
+              statusColor: _connectivityService.currentStatus == ConnectionStatus.online
+                  ? Colors.orange
+                  : Colors.grey,
+            ),
+
           _buildMenuOption(
             icon: Icons.settings_outlined,
             title: 'Settings',
             onTap: () {
               _showComingSoonDialog('Settings');
             },
+          ),
+
+          // Connection status option
+          _buildMenuOption(
+            icon: _connectivityService.currentStatus == ConnectionStatus.online
+                ? Icons.wifi
+                : Icons.wifi_off,
+            title: 'Connection Status',
+            subtitle: _connectivityService.currentStatus == ConnectionStatus.online
+                ? 'Online mode'
+                : 'Offline mode',
+            textColor: _connectivityService.currentStatus == ConnectionStatus.online
+                ? Colors.green
+                : Colors.orange,
+            iconColor: _connectivityService.currentStatus == ConnectionStatus.online
+                ? Colors.green
+                : Colors.orange,
+            onTap: null, // Just informational, no action
           ),
 
           _buildMenuOption(
@@ -1246,7 +1627,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                   onChanged: onToggleChanged,
                   activeColor: accentColor,
                 )
-              else if (!showStatusIcon)
+              else if (!showStatusIcon && onTap != null)
                 Icon(
                   Icons.arrow_forward_ios,
                   size: 16,
@@ -1341,3 +1722,70 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   }
 }
 
+// Helper extension method for GeofenceUtil to use location list
+extension GeofenceUtilExtension on GeofenceUtil {
+  static Future<Map<String, dynamic>> checkGeofenceStatusWithLocations(
+      BuildContext context,
+      List<LocationModel> locations
+      ) async {
+    bool hasPermission = await GeofenceUtil.checkLocationPermission(context);
+    if (!hasPermission) {
+      return {
+        'withinGeofence': false,
+        'location': null,
+        'distance': null,
+      };
+    }
+
+    Position? currentPosition = await GeofenceUtil.getCurrentPosition();
+    if (currentPosition == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to get current location'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return {
+        'withinGeofence': false,
+        'location': null,
+        'distance': null,
+      };
+    }
+
+    // Find closest location and check if within radius
+    LocationModel? closestLocation;
+    double? shortestDistance;
+    bool withinAnyGeofence = false;
+
+    for (var location in locations) {
+      double distanceInMeters = Geolocator.distanceBetween(
+        currentPosition.latitude,
+        currentPosition.longitude,
+        location.latitude,
+        location.longitude,
+      );
+
+      // Update closest location if this is closer than previous
+      if (shortestDistance == null || distanceInMeters < shortestDistance) {
+        shortestDistance = distanceInMeters;
+        closestLocation = location;
+      }
+
+      // Check if within this location's radius
+      if (distanceInMeters <= location.radius) {
+        withinAnyGeofence = true;
+        // If within radius, prioritize this location
+        closestLocation = location;
+        shortestDistance = distanceInMeters;
+        break; // Optimization: we found a matching location, no need to check others
+      }
+    }
+
+    // Return result
+    return {
+      'withinGeofence': withinAnyGeofence,
+      'location': closestLocation,
+      'distance': shortestDistance,
+    };
+  }
+}

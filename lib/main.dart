@@ -10,11 +10,32 @@ import 'package:face_auth_compatible/pin_entry/app_password_entry_view.dart';
 import 'package:face_auth_compatible/dashboard/dashboard_view.dart';
 import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:face_auth_compatible/services/service_locator.dart';
+
+// Import the new services for offline functionality
+import 'package:face_auth_compatible/services/sync_service.dart';
+import 'package:face_auth_compatible/services/connectivity_service.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+
+  // Initialize Firestore for offline persistence
+  await _initializeFirestoreOfflineMode();
+
+  // Setup service locator
+  setupServiceLocator();
+
   runApp(const MyApp());
+}
+
+// Configure Firestore for offline persistence
+Future<void> _initializeFirestoreOfflineMode() async {
+  FirebaseFirestore.instance.settings = Settings(
+    persistenceEnabled: true,
+    cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
+  );
 }
 
 class MyApp extends StatefulWidget {
@@ -28,12 +49,38 @@ class _MyAppState extends State<MyApp> {
   bool? _showOnboarding;
   String? _loggedInEmployeeId;
 
+  // Services for offline functionality
+  late SyncService _syncService;
+  late ConnectivityService _connectivityService;
+
   @override
   void initState() {
     super.initState();
+    _initializeServices();
     _checkLoginStatus();
     _initializeLocationData();
     _initializeAdminAccount();
+  }
+
+  // Initialize services for offline functionality
+  void _initializeServices() {
+    _connectivityService = ConnectivityService();
+    _syncService = SyncService();
+    _syncService.initialize();
+
+    // Listen for connectivity changes
+    _connectivityService.connectionStatusStream.listen((status) {
+      if (status == ConnectionStatus.online) {
+        // Synchronize when coming back online
+        _syncService.syncData();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _syncService.dispose();
+    super.dispose();
   }
 
   Future<void> _checkLoginStatus() async {
@@ -50,26 +97,51 @@ class _MyAppState extends State<MyApp> {
 
     // Check if a user is already authenticated (has an app password)
     if (authenticatedUserId != null) {
-      // Verify user exists in Firestore
-      try {
-        DocumentSnapshot doc = await FirebaseFirestore.instance
-            .collection('employees')
-            .doc(authenticatedUserId)
-            .get();
+      // First check locally stored data
+      bool userExists = await _checkUserExistsLocally(authenticatedUserId);
 
-        if (doc.exists) {
-          setState(() {
-            _loggedInEmployeeId = authenticatedUserId;
-            _showOnboarding = false;
-          });
-          return;
+      if (userExists) {
+        setState(() {
+          _loggedInEmployeeId = authenticatedUserId;
+          _showOnboarding = false;
+        });
+        return;
+      }
+
+      // If not found locally or online mode, check Firestore
+      if (_connectivityService.currentStatus == ConnectionStatus.online) {
+        try {
+          DocumentSnapshot doc = await FirebaseFirestore.instance
+              .collection('employees')
+              .doc(authenticatedUserId)
+              .get();
+
+          if (doc.exists) {
+            // Cache the user data locally
+            _saveUserDataLocally(authenticatedUserId, doc.data() as Map<String, dynamic>);
+
+            setState(() {
+              _loggedInEmployeeId = authenticatedUserId;
+              _showOnboarding = false;
+            });
+            return;
+          }
+        } catch (e) {
+          print("Error checking authenticated user: $e");
         }
-      } catch (e) {
-        print("Error checking authenticated user: $e");
       }
     }
 
-    // Check if any user is registered
+    // Check if any user is registered - locally first if offline
+    if (_connectivityService.currentStatus == ConnectionStatus.offline) {
+      bool hasRegisteredUsers = await _checkRegisteredUsersLocally();
+      setState(() {
+        _showOnboarding = !hasRegisteredUsers;
+      });
+      return;
+    }
+
+    // If online, check Firestore
     try {
       QuerySnapshot userQuery = await FirebaseFirestore.instance
           .collection('employees')
@@ -79,17 +151,58 @@ class _MyAppState extends State<MyApp> {
 
       setState(() {
         // If users exist, show app password entry, otherwise show PIN entry
-        _showOnboarding = false;
+        _showOnboarding = userQuery.docs.isEmpty;
       });
     } catch (e) {
       print("Error checking registration status: $e");
+      // Default to onboarding if error
       setState(() {
         _showOnboarding = true;
       });
     }
   }
 
+  // Check if user exists in local storage
+  Future<bool> _checkUserExistsLocally(String userId) async {
+    try {
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      return prefs.containsKey('user_data_$userId');
+    } catch (e) {
+      print("Error checking local user data: $e");
+      return false;
+    }
+  }
+
+  // Save user data locally
+  Future<void> _saveUserDataLocally(String userId, Map<String, dynamic> userData) async {
+    try {
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      // We simply store that the user exists - full data will be saved elsewhere
+      await prefs.setBool('user_exists_$userId', true);
+    } catch (e) {
+      print("Error saving user data locally: $e");
+    }
+  }
+
+  // Check if there are any registered users locally
+  Future<bool> _checkRegisteredUsersLocally() async {
+    try {
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      // Get all keys that might be user data
+      Set<String> keys = prefs.getKeys();
+      return keys.any((key) => key.startsWith('user_exists_'));
+    } catch (e) {
+      print("Error checking registered users locally: $e");
+      return false;
+    }
+  }
+
   Future<void> _initializeLocationData() async {
+    // Only run this if online
+    if (_connectivityService.currentStatus == ConnectionStatus.offline) {
+      return;
+    }
+
     try {
       // Check if we need to create the default location
       QuerySnapshot locationsSnapshot = await FirebaseFirestore.instance
@@ -116,6 +229,11 @@ class _MyAppState extends State<MyApp> {
   }
 
   Future<void> _initializeAdminAccount() async {
+    // Only run this if online
+    if (_connectivityService.currentStatus == ConnectionStatus.offline) {
+      return;
+    }
+
     try {
       // Check if admin users collection exists
       final adminSnapshot = await FirebaseFirestore.instance
