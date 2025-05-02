@@ -34,6 +34,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   @override
   void initState() {
     super.initState();
+    _loadDarkModePreference();
     _fetchUserData();
     _fetchAttendanceStatus();
     _fetchRecentActivity();
@@ -52,6 +53,20 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   void dispose() {
     _tabController.dispose();
     super.dispose();
+  }
+
+  // Load dark mode preference
+  Future<void> _loadDarkModePreference() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _isDarkMode = prefs.getBool('isDarkMode') ?? false;
+    });
+  }
+
+  // Save dark mode preference
+  Future<void> _saveDarkModePreference(bool isDarkMode) async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('isDarkMode', isDarkMode);
   }
 
   void _updateDateTime() {
@@ -261,7 +276,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     }
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: _isDarkMode ? const Color(0xFF121212) : Colors.white,
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: accentColor))
           : SafeArea(
@@ -270,7 +285,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
             // Profile header
             _buildProfileHeader(),
 
-            // Date and time (without the yellow strip indicator)
+            // Date and time
             _buildDateTimeWithoutStrip(),
 
             // Status card
@@ -291,19 +306,23 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     String designation = _userData?['designation'] ?? 'Employee';
     String? imageBase64 = _userData?['image'];
 
-    return Padding(
+    return Container(
       padding: const EdgeInsets.all(16.0),
+      color: _isDarkMode ? const Color(0xFF1E1E1E) : Colors.white,
       child: Row(
         children: [
           // Profile image
           CircleAvatar(
             radius: 25,
-            backgroundColor: Colors.grey.shade200,
+            backgroundColor: _isDarkMode ? Colors.grey.shade800 : Colors.grey.shade200,
             backgroundImage: imageBase64 != null
                 ? MemoryImage(base64Decode(imageBase64))
                 : null,
             child: imageBase64 == null
-                ? const Icon(Icons.person, color: Colors.grey)
+                ? Icon(
+              Icons.person,
+              color: _isDarkMode ? Colors.grey.shade300 : Colors.grey,
+            )
                 : null,
           ),
 
@@ -317,21 +336,22 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                 Text(
                   'Welcome back,',
                   style: TextStyle(
-                    color: Colors.grey.shade600,
+                    color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600,
                     fontSize: 14,
                   ),
                 ),
                 Text(
                   name.toUpperCase(),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
+                    color: _isDarkMode ? Colors.white : Colors.black,
                   ),
                 ),
                 Text(
                   designation,
                   style: TextStyle(
-                    color: Colors.grey.shade600,
+                    color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600,
                     fontSize: 14,
                   ),
                 ),
@@ -341,7 +361,10 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
 
           // Settings icon
           IconButton(
-            icon: const Icon(Icons.settings_outlined),
+            icon: Icon(
+              Icons.settings_outlined,
+              color: _isDarkMode ? Colors.white : Colors.black,
+            ),
             onPressed: () {},
           ),
         ],
@@ -350,27 +373,36 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   }
 
   Widget _buildDateTimeWithoutStrip() {
-    return Padding(
+    return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: _isDarkMode ? const Color(0xFF1E1E1E) : Colors.white,
       child: Row(
         children: [
-          Icon(Icons.calendar_today, size: 16, color: Colors.grey.shade600),
+          Icon(
+              Icons.calendar_today,
+              size: 16,
+              color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600
+          ),
           const SizedBox(width: 8),
           Text(
             _formattedDate,
             style: TextStyle(
               fontSize: 14,
-              color: Colors.grey.shade700,
+              color: _isDarkMode ? Colors.grey.shade300 : Colors.grey.shade700,
             ),
           ),
           const Spacer(),
-          Icon(Icons.access_time, size: 16, color: Colors.grey.shade600),
+          Icon(
+              Icons.access_time,
+              size: 16,
+              color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600
+          ),
           const SizedBox(width: 4),
           Text(
             _currentTime,
             style: TextStyle(
               fontSize: 14,
-              color: Colors.grey.shade700,
+              color: _isDarkMode ? Colors.grey.shade300 : Colors.grey.shade700,
             ),
           ),
         ],
@@ -382,8 +414,15 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     return Container(
       margin: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFF8D8AD3), // Purple background as shown in your screenshot
+        color: _isDarkMode ? const Color(0xFF2D2D3A) : const Color(0xFF8D8AD3),
         borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -406,9 +445,9 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                       ),
                     ),
                     const SizedBox(height: 4),
-                    const Text(
-                      "Not Started",
-                      style: TextStyle(
+                    Text(
+                      _isCheckedIn ? "Checked In" : "Not Started",
+                      style: const TextStyle(
                         color: Colors.white,
                         fontSize: 22,
                         fontWeight: FontWeight.bold,
@@ -417,7 +456,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                   ],
                 ),
 
-                // Right side - Status indicator (Not checked in)
+                // Right side - Status indicator
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
@@ -432,9 +471,9 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                         size: 16,
                       ),
                       const SizedBox(width: 4),
-                      const Text(
-                        "Not checked in",
-                        style: TextStyle(
+                      Text(
+                        _isCheckedIn ? "Checked in" : "Not checked in",
+                        style: const TextStyle(
                           color: Colors.white,
                           fontSize: 12,
                           fontWeight: FontWeight.w500,
@@ -447,7 +486,8 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
             ),
           ),
 
-          // Check In button
+          // Check In/Out button with proper image
+
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             child: SizedBox(
@@ -466,11 +506,11 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    SvgPicture.asset(
-                      _isCheckedIn ? 'assets/images/logout.svg' : 'assets/images/checkin.svg',
-                      width: 24,
-                      height: 24,
-                      colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
+                    // Check In/Out icon
+                    Icon(
+                      _isCheckedIn ? Icons.exit_to_app : Icons.login,
+                      color: Colors.white,
+                      size: 24,
                     ),
                     const SizedBox(width: 10),
                     Text(
@@ -495,15 +535,18 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     return Column(
       children: [
         // Tab bar
-        TabBar(
-          controller: _tabController,
-          labelColor: accentColor,
-          unselectedLabelColor: Colors.grey,
-          indicatorColor: accentColor,
-          tabs: const [
-            Tab(text: "Recent Activity"),
-            Tab(text: "Menu"),
-          ],
+        Container(
+          color: _isDarkMode ? const Color(0xFF1E1E1E) : Colors.white,
+          child: TabBar(
+            controller: _tabController,
+            labelColor: accentColor,
+            unselectedLabelColor: _isDarkMode ? Colors.grey.shade400 : Colors.grey,
+            indicatorColor: accentColor,
+            tabs: const [
+              Tab(text: "Recent Activity"),
+              Tab(text: "Menu"),
+            ],
+          ),
         ),
 
         // Tab content
@@ -521,183 +564,209 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   }
 
   Widget _buildRecentActivityTab() {
+    // Background color based on theme
+    Color bgColor = _isDarkMode ? const Color(0xFF121212) : Colors.grey.shade100;
+
     // Show empty state with your specific NODATA.svg asset
     if (_recentActivity.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            SvgPicture.asset(
-              'assets/images/NODATA.svg', // Your specific asset
-              height: 120,
-              width: 120,
-              placeholderBuilder: (context) => Icon(
-                Icons.calendar_today_outlined,
-                size: 80,
-                color: Colors.grey.shade300,
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              "No activity records found",
-              style: TextStyle(
-                color: Colors.grey,
-                fontSize: 16,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    // Show activity list if data exists
-    return ListView.builder(
-      padding: const EdgeInsets.all(10),
-      itemCount: _recentActivity.length,
-      itemBuilder: (context, index) {
-        // Activity list item implementation
-        Map<String, dynamic> activity = _recentActivity[index];
-        String date = activity['date'] ?? 'Unknown';
-        DateTime? checkIn = activity['checkIn'] != null
-            ? (activity['checkIn'] as Timestamp).toDate()
-            : null;
-        DateTime? checkOut = activity['checkOut'] != null
-            ? (activity['checkOut'] as Timestamp).toDate()
-            : null;
-        String status = activity['workStatus'] ?? 'Unknown';
-
-        return Container(
-          margin: const EdgeInsets.only(bottom: 8),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Colors.grey.shade200),
-          ),
-          child: ListTile(
-            title: Text(
-              _formatDisplayDate(date),
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Text(
-                      checkIn != null
-                          ? 'In: ${DateFormat('h:mm a').format(checkIn)}'
-                          : 'Not checked in',
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                    ),
-                    const SizedBox(width: 16),
-                    Text(
-                      checkOut != null
-                          ? 'Out: ${DateFormat('h:mm a').format(checkOut)}'
-                          : 'Not checked out',
-                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            trailing: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: _getStatusColor(status).withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                status,
-                style: TextStyle(
-                  color: _getStatusColor(status),
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildMenuTab() {
-    return ListView(
-      padding: const EdgeInsets.all(10),
-      children: [
-        _buildMenuOption(
-          icon: Icons.person_outline,
-          title: 'Profile details',
-          onTap: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (context) => UserProfilePage(
-                  employeeId: widget.employeeId,
-                  userData: _userData!,
-                ),
-              ),
-            );
-          },
-        ),
-
-        _buildMenuOption(
-          icon: Icons.dark_mode_outlined,
-          title: 'Dark mode',
-          hasToggle: true,
-          toggleValue: _isDarkMode,
-          onToggleChanged: (value) {
-            setState(() {
-              _isDarkMode = value;
-            });
-          },
-        ),
-
-        _buildMenuOption(
-          icon: Icons.settings_outlined,
-          title: 'Settings',
-          onTap: () {
-            _showComingSoonDialog('Settings');
-          },
-        ),
-
-        _buildMenuOption(
-          icon: Icons.logout,
-          title: 'Log out',
-          textColor: Colors.red,
-          iconColor: Colors.red,
-          onTap: _logout,
-        ),
-
-        const SizedBox(height: 20),
-
-        // Coming soon section
-        Center(
+      return Container(
+        color: bgColor,
+        child: Center(
           child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               SvgPicture.asset(
-                'assets/images/under_development.svg',
-                height: 60,
-                width: 60,
+                'assets/images/NODATA.svg', // Your specific asset
+                height: 120,
+                width: 120,
                 placeholderBuilder: (context) => Icon(
-                  Icons.construction,
-                  size: 60,
-                  color: Colors.grey.shade300,
+                  Icons.calendar_today_outlined,
+                  size: 80,
+                  color: _isDarkMode ? Colors.grey.shade700 : Colors.grey.shade300,
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 16),
               Text(
-                'Additional features coming soon!',
+                "No activity records found",
                 style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.grey.shade600,
+                  color: _isDarkMode ? Colors.grey.shade400 : Colors.grey,
+                  fontSize: 16,
                 ),
               ),
             ],
           ),
         ),
-      ],
+      );
+    }
+
+    // Show activity list if data exists
+    return Container(
+      color: bgColor,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(10),
+        itemCount: _recentActivity.length,
+        itemBuilder: (context, index) {
+          // Activity list item implementation
+          Map<String, dynamic> activity = _recentActivity[index];
+          String date = activity['date'] ?? 'Unknown';
+          DateTime? checkIn = activity['checkIn'] != null
+              ? (activity['checkIn'] as Timestamp).toDate()
+              : null;
+          DateTime? checkOut = activity['checkOut'] != null
+              ? (activity['checkOut'] as Timestamp).toDate()
+              : null;
+          String status = activity['workStatus'] ?? 'Unknown';
+
+          return Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            decoration: BoxDecoration(
+              color: _isDarkMode ? const Color(0xFF2A2A2A) : Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                  color: _isDarkMode ? Colors.grey.shade800 : Colors.grey.shade200
+              ),
+            ),
+            child: ListTile(
+              contentPadding: const EdgeInsets.all(12),
+              title: Text(
+                _formatDisplayDate(date),
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                  color: _isDarkMode ? Colors.white : Colors.black,
+                ),
+              ),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Text(
+                        checkIn != null
+                            ? 'In: ${DateFormat('h:mm a').format(checkIn)}'
+                            : 'Not checked in',
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Text(
+                        checkOut != null
+                            ? 'Out: ${DateFormat('h:mm a').format(checkOut)}'
+                            : 'Not checked out',
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              trailing: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _getStatusColor(status).withOpacity(_isDarkMode ? 0.2 : 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  status,
+                  style: TextStyle(
+                    color: _getStatusColor(status),
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildMenuTab() {
+    return Container(
+      color: _isDarkMode ? const Color(0xFF121212) : Colors.grey.shade100,
+      child: ListView(
+        padding: const EdgeInsets.all(10),
+        children: [
+          _buildMenuOption(
+            icon: Icons.person_outline,
+            title: 'Profile details',
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => UserProfilePage(
+                    employeeId: widget.employeeId,
+                    userData: _userData!,
+                  ),
+                ),
+              );
+            },
+          ),
+
+          _buildMenuOption(
+            icon: Icons.dark_mode_outlined,
+            title: 'Dark mode',
+            hasToggle: true,
+            toggleValue: _isDarkMode,
+            onToggleChanged: (value) {
+              setState(() {
+                _isDarkMode = value;
+                _saveDarkModePreference(value);
+              });
+            },
+          ),
+
+          _buildMenuOption(
+            icon: Icons.settings_outlined,
+            title: 'Settings',
+            onTap: () {
+              _showComingSoonDialog('Settings');
+            },
+          ),
+
+          _buildMenuOption(
+            icon: Icons.logout,
+            title: 'Log out',
+            textColor: Colors.red,
+            iconColor: Colors.red,
+            onTap: _logout,
+          ),
+
+          const SizedBox(height: 20),
+
+          // Coming soon section
+          Center(
+            child: Column(
+              children: [
+                SvgPicture.asset(
+                  'assets/images/under_development.svg',
+                  height: 60,
+                  width: 60,
+                  placeholderBuilder: (context) => Icon(
+                    Icons.construction,
+                    size: 60,
+                    color: _isDarkMode ? Colors.grey.shade700 : Colors.grey.shade300,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Additional features coming soon!',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -711,13 +780,19 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     Color iconColor = Colors.black54,
     Color textColor = Colors.black87,
   }) {
+    // Adjust colors for dark mode
+    if (_isDarkMode) {
+      if (iconColor == Colors.black54) iconColor = Colors.white70;
+      if (textColor == Colors.black87) textColor = Colors.white;
+    }
+
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 4),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: _isDarkMode ? const Color(0xFF2A2A2A) : Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: Colors.grey.shade200,
+          color: _isDarkMode ? Colors.grey.shade800 : Colors.grey.shade200,
         ),
       ),
       child: InkWell(
@@ -730,7 +805,9 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: Colors.grey.withOpacity(0.1),
+                  color: _isDarkMode
+                      ? Colors.black.withOpacity(0.3)
+                      : Colors.grey.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
@@ -756,10 +833,10 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                   activeColor: accentColor,
                 )
               else
-                const Icon(
+                Icon(
                   Icons.arrow_forward_ios,
                   size: 16,
-                  color: Colors.grey,
+                  color: _isDarkMode ? Colors.grey.shade600 : Colors.grey,
                 ),
             ],
           ),
@@ -804,24 +881,17 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     }
   }
 
-  IconData _getStatusIcon(String status) {
-    switch (status.toLowerCase()) {
-      case 'completed':
-        return Icons.check_circle;
-      case 'in progress':
-        return Icons.access_time;
-      case 'pending':
-        return Icons.hourglass_empty;
-      default:
-        return Icons.circle;
-    }
-  }
-
   void _showComingSoonDialog(String feature) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Coming Soon'),
+        backgroundColor: _isDarkMode ? const Color(0xFF2A2A2A) : Colors.white,
+        title: Text(
+          'Coming Soon',
+          style: TextStyle(
+            color: _isDarkMode ? Colors.white : Colors.black,
+          ),
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -832,14 +902,17 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
               placeholderBuilder: (context) => Icon(
                 Icons.construction,
                 size: 80,
-                color: Colors.grey.shade400,
+                color: _isDarkMode ? Colors.grey.shade600 : Colors.grey.shade400,
               ),
             ),
             const SizedBox(height: 16),
             Text(
               'The $feature feature is coming soon!',
               textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 16),
+              style: TextStyle(
+                fontSize: 16,
+                color: _isDarkMode ? Colors.white : Colors.black,
+              ),
             ),
           ],
         ),
