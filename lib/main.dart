@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:face_auth_compatible/onboarding/onboarding_screen.dart';
 import 'package:face_auth_compatible/pin_entry/pin_entry_view.dart';
@@ -31,6 +32,8 @@ class _MyAppState extends State<MyApp> {
   void initState() {
     super.initState();
     _checkLoginStatus();
+    _initializeLocationData();
+    _initializeAdminAccount();
   }
 
   Future<void> _checkLoginStatus() async {
@@ -83,6 +86,65 @@ class _MyAppState extends State<MyApp> {
       setState(() {
         _showOnboarding = true;
       });
+    }
+  }
+
+  Future<void> _initializeLocationData() async {
+    try {
+      // Check if we need to create the default location
+      QuerySnapshot locationsSnapshot = await FirebaseFirestore.instance
+          .collection('locations')
+          .limit(1)
+          .get();
+
+      if (locationsSnapshot.docs.isEmpty) {
+        // No locations exist, create the default one
+        await FirebaseFirestore.instance.collection('locations').add({
+          'name': 'Central Plaza',
+          'address': 'DIP 1, Street 72, Dubai',
+          'latitude': 24.985454,
+          'longitude': 55.175509,
+          'radius': 200.0,
+          'isActive': true,
+        });
+
+        print('Default location created');
+      }
+    } catch (e) {
+      print('Error initializing location data: $e');
+    }
+  }
+
+  Future<void> _initializeAdminAccount() async {
+    try {
+      // Check if admin users collection exists
+      final adminSnapshot = await FirebaseFirestore.instance
+          .collection('admins')
+          .limit(1)
+          .get();
+
+      if (adminSnapshot.docs.isEmpty) {
+        // Create default admin account with credentials from your request
+        await FirebaseAuth.instance.createUserWithEmailAndPassword(
+          email: "admin@pts",
+          password: "pts123",
+        ).then((userCredential) async {
+          // Store admin role in Firestore
+          await FirebaseFirestore.instance
+              .collection('admins')
+              .doc(userCredential.user!.uid)
+              .set({
+            'email': "admin@pts",
+            'isAdmin': true,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+
+          print('Default admin account created');
+        });
+      }
+    } catch (e) {
+      print('Error creating admin account: $e');
+      // Likely already exists, just continue
     }
   }
 

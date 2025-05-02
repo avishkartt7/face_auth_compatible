@@ -12,6 +12,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:face_auth_compatible/model/location_model.dart';
 
 class DashboardView extends StatefulWidget {
   final String employeeId;
@@ -32,6 +33,8 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   String _currentTime = '';
   List<Map<String, dynamic>> _recentActivity = [];
   late TabController _tabController;
+  LocationModel? _nearestLocation;
+  List<LocationModel> _availableLocations = [];
 
   // Geofencing related variables
   bool _isCheckingLocation = false;
@@ -107,17 +110,22 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
         timeLimit: const Duration(seconds: 10),
       );
 
-      bool withinGeofence = await GeofenceUtil.isWithinGeofence(context);
-      double? distance = await GeofenceUtil.getDistanceToOffice(context);
+      // Get detailed geofence status with all locations
+      Map<String, dynamic> status = await GeofenceUtil.checkGeofenceStatus(context);
 
-      debugPrint('GEOFENCE CHECK RESULT:');
-      debugPrint('Within geofence: $withinGeofence');
-      debugPrint('Distance: $distance meters');
+      bool withinGeofence = status['withinGeofence'] as bool;
+      LocationModel? nearestLocation = status['location'] as LocationModel?;
+      double? distance = status['distance'] as double?;
+
+      // Get all available locations for the status card
+      List<LocationModel> locations = await GeofenceUtil.getActiveLocations(context);
 
       if (mounted) {
         setState(() {
           _isWithinGeofence = withinGeofence;
+          _nearestLocation = nearestLocation;
           _distanceToOffice = distance;
+          _availableLocations = locations;
           _isCheckingLocation = false;
         });
       }
@@ -229,7 +237,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     if (!_isCheckedIn && !_isWithinGeofence) {
       CustomSnackBar.errorSnackBar(
           "You must be within the office premises to check in. " +
-              "You are currently ${_distanceToOffice != null ? '${_distanceToOffice!.toStringAsFixed(0)} meters' : 'too far'} away."
+              "You are currently ${_distanceToOffice != null ? '${_distanceToOffice!.toStringAsFixed(0)} meters' : 'too far'} away from ${_nearestLocation?.name ?? 'the office'}."
       );
       return;
     }
@@ -259,7 +267,9 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
           'checkOut': null,
           'workStatus': 'In Progress',
           'totalHours': 0,
-          'location': 'Central Plaza, DIP 1, Dubai',
+          'location': _nearestLocation?.name ?? 'Unknown',
+          'locationId': _nearestLocation?.id ?? 'default',
+          'address': _nearestLocation?.address ?? 'Unknown',
           'isWithinGeofence': true,
         };
 
@@ -509,6 +519,8 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   }
 
   Widget _buildStatusCard() {
+    final String locationName = _nearestLocation?.name ?? 'office location';
+
     return Container(
       margin: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -584,7 +596,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
             ),
           ),
 
-          // Geofence status indicator
+          // Geofence status indicator with location name
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Row(
@@ -600,8 +612,8 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                     _isCheckingLocation
                         ? "Checking location..."
                         : _isWithinGeofence
-                        ? "You are within the office location"
-                        : "You are outside the office location" +
+                        ? "You are at $locationName"
+                        : "You are outside $locationName" +
                         (_distanceToOffice != null
                             ? " (${_distanceToOffice!.toStringAsFixed(0)}m away)"
                             : ""),
@@ -624,6 +636,57 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
             ),
           ),
 
+          // Available locations list (if more than one)
+          if (_availableLocations.length > 1)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    "Available Check-in Locations:",
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.9),
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  ...List.generate(
+                    _availableLocations.length,
+                        (index) {
+                      final location = _availableLocations[index];
+                      final isNearest = _nearestLocation?.id == location.id;
+
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Row(
+                          children: [
+                            Icon(
+                              isNearest ? Icons.star : Icons.location_on_outlined,
+                              color: isNearest ? Colors.amber : Colors.white70,
+                              size: 14,
+                            ),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                location.name,
+                                style: TextStyle(
+                                  color: Colors.white.withOpacity(0.9),
+                                  fontSize: 12,
+                                  fontWeight: isNearest ? FontWeight.bold : FontWeight.normal,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+
           // Debug button (for testing only - remove in production)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -641,10 +704,27 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text('Current: ${debugInfo['current_latitude']}, ${debugInfo['current_longitude']}'),
-                          Text('Office: ${debugInfo['office_latitude']}, ${debugInfo['office_longitude']}'),
+                          Text('Nearest: ${_nearestLocation?.name ?? 'None'}'),
                           Text('Distance: ${debugInfo['distance']?.toStringAsFixed(2)} meters'),
-                          Text('Radius: ${debugInfo['geofence_radius']} meters'),
                           Text('Within Geofence: ${debugInfo['within_geofence']}'),
+                          const Divider(),
+                          const Text('All Locations:'),
+                          ...List.generate(
+                            (debugInfo['locations'] as List?)?.length ?? 0,
+                                (i) {
+                              final location = (debugInfo['locations'] as List)[i];
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('${location['name']}:'),
+                                  Text('  Coords: ${location['latitude']}, ${location['longitude']}'),
+                                  Text('  Radius: ${location['radius']} meters'),
+                                  Text('  Distance: ${debugInfo['distance_to_${location['id']}']?.toStringAsFixed(2)} meters'),
+                                  Text('  Within: ${debugInfo['within_geofence_${location['id']}']}'),
+                                ],
+                              );
+                            },
+                          ),
                         ],
                       ),
                     ),

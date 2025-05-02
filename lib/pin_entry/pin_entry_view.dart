@@ -5,6 +5,7 @@ import 'package:face_auth_compatible/common/utils/custom_snackbar.dart';
 import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:face_auth_compatible/pin_entry/user_profile_view.dart';
 import 'package:face_auth_compatible/model/user_model.dart';
+import 'package:face_auth_compatible/admin/admin_login_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -107,7 +108,7 @@ class _PinEntryViewState extends State<PinEntryView> with SingleTickerProviderSt
     FocusScope.of(context).requestFocus(_focusNodes[0]);
   }
 
-  void _verifyPin() async {
+  Future<void> _verifyPin() async {
     if (_pin.length != 4) {
       _showError("Please enter a 4-digit PIN");
       return;
@@ -117,7 +118,20 @@ class _PinEntryViewState extends State<PinEntryView> with SingleTickerProviderSt
     HapticFeedback.mediumImpact();
 
     try {
-      // Query Firestore for the employee with the given PIN
+      // Check if this is the admin PIN
+      if (_pin == "9999") {  // You can change this to any admin PIN you want
+        setState(() => _isLoading = false);
+        if (mounted) {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => const AdminLoginView(),
+            ),
+          );
+        }
+        return;
+      }
+
+      // Regular employee PIN check continues here...
       final querySnapshot = await FirebaseFirestore.instance
           .collection("employees")
           .where("pin", isEqualTo: _pin)
@@ -374,6 +388,37 @@ class _PinEntryViewState extends State<PinEntryView> with SingleTickerProviderSt
                     textAlign: TextAlign.center,
                   ),
                 ),
+
+              // Admin Login Button
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: TextButton(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (context) => const AdminLoginView(),
+                        ),
+                      );
+                    },
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(Icons.admin_panel_settings, color: Colors.white70, size: 16),
+                        SizedBox(width: 4),
+                        Text(
+                          "Admin Login",
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
