@@ -7,7 +7,7 @@ import 'dart:math' as math;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:face_auth_compatible/authenticate_face/scanning_animation/animated_view.dart';
-import 'package:face_auth_compatible/authenticate_face/user_password_setup_view.dart'; // New import
+import 'package:face_auth_compatible/authenticate_face/user_password_setup_view.dart';
 import 'package:face_auth_compatible/common/utils/custom_snackbar.dart';
 import 'package:face_auth_compatible/common/utils/extensions/size_extension.dart';
 import 'package:face_auth_compatible/common/utils/extract_face_feature.dart';
@@ -24,12 +24,14 @@ class AuthenticateFaceView extends StatefulWidget {
   final String? employeeId; // Made optional for backward compatibility
   final String? employeePin; // Made optional for backward compatibility
   final bool isRegistrationValidation;
+  final Function(bool success)? onAuthenticationComplete; // Add callback for check-in process
 
   const AuthenticateFaceView({
     Key? key,
     this.employeeId,
     this.employeePin,
     this.isRegistrationValidation = false,
+    this.onAuthenticationComplete,
   }) : super(key: key);
 
   @override
@@ -91,11 +93,11 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
     super.dispose();
   }
 
-  get _playScanningAudio => _audioPlayer
+  AudioPlayer get _playScanningAudio => _audioPlayer
     ..setReleaseMode(ReleaseMode.loop)
     ..play(AssetSource("scan_beep.wav"));
 
-  get _playFailedAudio => _audioPlayer
+  AudioPlayer get _playFailedAudio => _audioPlayer
     ..stop()
     ..setReleaseMode(ReleaseMode.release)
     ..play(AssetSource("failed.mp3"));
@@ -141,7 +143,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
                     if (widget.isRegistrationValidation)
                       Padding(
                         padding: EdgeInsets.only(bottom: 0.02.sh),
-                        child: Text(
+                        child: const Text(
                           "Let's verify your face was registered correctly",
                           style: TextStyle(
                             color: Colors.white,
@@ -217,7 +219,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
     );
   }
 
-  Future _setImage(Uint8List imageToAuthenticate) async {
+  Future<void> _setImage(Uint8List imageToAuthenticate) async {
     image2.bitmap = base64Encode(imageToAuthenticate);
     image2.imageType = regula.ImageType.PRINTED;
 
@@ -373,8 +375,13 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
             );
           }
         } else {
-          // If this is a regular authentication, show success
+          // If this is a regular authentication (like for check-in)
           _showSuccessDialog();
+
+          // Call the callback if provided (for check-in process)
+          if (widget.onAuthenticationComplete != null) {
+            widget.onAuthenticationComplete!(true);
+          }
         }
       } else {
         // Face doesn't match
@@ -382,15 +389,25 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
           title: "Authentication Failed",
           description: "Face doesn't match. Please try again.",
         );
+
+        // Call the callback with false if provided (for check-in process)
+        if (widget.onAuthenticationComplete != null) {
+          widget.onAuthenticationComplete!(false);
+        }
       }
     } catch (e) {
       setState(() => isMatching = false);
       _playFailedAudio;
       CustomSnackBar.errorSnackBar("Error during face matching: $e");
+
+      // Call the callback with false if provided (for check-in process)
+      if (widget.onAuthenticationComplete != null) {
+        widget.onAuthenticationComplete!(false);
+      }
     }
   }
 
-  _showSuccessDialog() {
+  void _showSuccessDialog() {
     _audioPlayer.stop();
     setState(() => isMatching = false);
 
@@ -403,7 +420,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
           TextButton(
             onPressed: () {
               Navigator.of(context).pop();
-              // Navigate to the main dashboard (to be implemented)
+              // The dashboard will handle navigation
             },
             child: const Text(
               "Continue",
@@ -415,7 +432,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
     );
   }
 
-  _showFailureDialog({
+  void _showFailureDialog({
     required String title,
     required String description,
   }) {
