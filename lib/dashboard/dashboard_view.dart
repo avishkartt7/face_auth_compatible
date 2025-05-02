@@ -7,9 +7,11 @@ import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:face_auth_compatible/pin_entry/pin_entry_view.dart';
 import 'package:face_auth_compatible/dashboard/user_profile_page.dart';
 import 'package:face_auth_compatible/common/utils/custom_snackbar.dart';
+import 'package:face_auth_compatible/utils/geofence_util.dart';  // Import the geofencing utility
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
+import 'package:geolocator/geolocator.dart';
 
 class DashboardView extends StatefulWidget {
   final String employeeId;
@@ -31,6 +33,11 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   List<Map<String, dynamic>> _recentActivity = [];
   late TabController _tabController;
 
+  // Geofencing related variables
+  bool _isCheckingLocation = false;
+  bool _isWithinGeofence = false;
+  double? _distanceToOffice;
+
   @override
   void initState() {
     super.initState();
@@ -39,6 +46,9 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     _fetchAttendanceStatus();
     _fetchRecentActivity();
     _tabController = TabController(length: 2, vsync: this);
+
+    // Check geofence status when the dashboard loads
+    _checkGeofenceStatus();
 
     // Initialize date and time
     _updateDateTime();
@@ -79,6 +89,46 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
 
       // Update time every minute
       Future.delayed(const Duration(minutes: 1), _updateDateTime);
+    }
+  }
+
+  // Check if user is within geofence
+  Future<void> _checkGeofenceStatus() async {
+    if (!mounted) return;
+
+    setState(() {
+      _isCheckingLocation = true;
+    });
+
+    try {
+      // Forcing the GPS to get fresh location data
+      await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.best,
+        timeLimit: const Duration(seconds: 10),
+      );
+
+      bool withinGeofence = await GeofenceUtil.isWithinGeofence(context);
+      double? distance = await GeofenceUtil.getDistanceToOffice(context);
+
+      debugPrint('GEOFENCE CHECK RESULT:');
+      debugPrint('Within geofence: $withinGeofence');
+      debugPrint('Distance: $distance meters');
+
+      if (mounted) {
+        setState(() {
+          _isWithinGeofence = withinGeofence;
+          _distanceToOffice = distance;
+          _isCheckingLocation = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error checking geofence: $e');
+      if (mounted) {
+        setState(() {
+          _isCheckingLocation = false;
+        });
+        CustomSnackBar.errorSnackBar("Error checking geofence status: $e");
+      }
     }
   }
 
@@ -159,6 +209,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
           'checkOut': data['checkOut'],
           'workStatus': data['workStatus'],
           'totalHours': data['totalHours'],
+          'location': data['location'] ?? 'Unknown',
         });
       }
 
@@ -171,10 +222,27 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   }
 
   Future<void> _handleCheckInOut() async {
+    // First, refresh the geofence status
+    await _checkGeofenceStatus();
+
+    // If trying to check in and not within geofence, show error
+    if (!_isCheckedIn && !_isWithinGeofence) {
+      CustomSnackBar.errorSnackBar(
+          "You must be within the office premises to check in. " +
+              "You are currently ${_distanceToOffice != null ? '${_distanceToOffice!.toStringAsFixed(0)} meters' : 'too far'} away."
+      );
+      return;
+    }
+
     try {
+      setState(() => _isLoading = true);
+
       // Get today's date in YYYY-MM-DD format for the document ID
       String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
       DateTime now = DateTime.now();
+
+      // Get current position for logging
+      Position? currentPosition = await GeofenceUtil.getCurrentPosition();
 
       // Reference to today's attendance document
       DocumentReference attendanceRef = FirebaseFirestore.instance
@@ -184,37 +252,58 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
           .doc(today);
 
       if (!_isCheckedIn) {
-        // Check In
-        await attendanceRef.set({
+        // Check In - only if within geofence
+        Map<String, dynamic> checkInData = {
           'date': today,
           'checkIn': Timestamp.fromDate(now),
           'checkOut': null,
           'workStatus': 'In Progress',
           'totalHours': 0,
-        }, SetOptions(merge: true));
+          'location': 'Central Plaza, DIP 1, Dubai',
+          'isWithinGeofence': true,
+        };
+
+        // Add location coordinates if available
+        if (currentPosition != null) {
+          checkInData['locationLat'] = currentPosition.latitude;
+          checkInData['locationLng'] = currentPosition.longitude;
+          checkInData['locationAccuracy'] = currentPosition.accuracy;
+        }
+
+        await attendanceRef.set(checkInData, SetOptions(merge: true));
 
         setState(() {
           _isCheckedIn = true;
           _checkInTime = now;
+          _isLoading = false;
         });
 
         CustomSnackBar.successSnackBar("Checked in successfully at $_currentTime");
       } else {
+        // Check Out - can be done from anywhere
         // Calculate hours worked
         double hoursWorked = _checkInTime != null
             ? now.difference(_checkInTime!).inMinutes / 60
             : 0;
 
-        // Check Out
-        await attendanceRef.update({
+        Map<String, dynamic> checkOutData = {
           'checkOut': Timestamp.fromDate(now),
           'workStatus': 'Completed',
           'totalHours': hoursWorked,
-        });
+        };
+
+        // Add location coordinates if available
+        if (currentPosition != null) {
+          checkOutData['checkoutLocationLat'] = currentPosition.latitude;
+          checkOutData['checkoutLocationLng'] = currentPosition.longitude;
+        }
+
+        await attendanceRef.update(checkOutData);
 
         setState(() {
           _isCheckedIn = false;
           _checkInTime = null;
+          _isLoading = false;
         });
 
         CustomSnackBar.successSnackBar("Checked out successfully at $_currentTime");
@@ -223,7 +312,9 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       // Refresh activity list
       _fetchRecentActivity();
     } catch (e) {
+      setState(() => _isLoading = false);
       CustomSnackBar.errorSnackBar("Error updating attendance: $e");
+      debugPrint('CheckInOut Error: $e');
     }
   }
 
@@ -297,6 +388,13 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
             ),
           ],
         ),
+      ),
+      // Add floating action button to refresh geofence status
+      floatingActionButton: FloatingActionButton(
+        onPressed: _checkGeofenceStatus,
+        tooltip: 'Refresh Location',
+        backgroundColor: accentColor,
+        child: const Icon(Icons.refresh_rounded),
       ),
     );
   }
@@ -486,17 +584,101 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
             ),
           ),
 
-          // Check In/Out button with proper image
+          // Geofence status indicator
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Row(
+              children: [
+                Icon(
+                  _isWithinGeofence ? Icons.location_on : Icons.location_off,
+                  color: _isWithinGeofence ? Colors.green : Colors.red,
+                  size: 16,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _isCheckingLocation
+                        ? "Checking location..."
+                        : _isWithinGeofence
+                        ? "You are within the office location"
+                        : "You are outside the office location" +
+                        (_distanceToOffice != null
+                            ? " (${_distanceToOffice!.toStringAsFixed(0)}m away)"
+                            : ""),
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.9),
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                if (_isCheckingLocation)
+                  const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 2,
+                    ),
+                  ),
+              ],
+            ),
+          ),
 
+          // Debug button (for testing only - remove in production)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: ElevatedButton(
+              onPressed: () async {
+                var debugInfo = await GeofenceUtil.getDebugInfo(context);
+                debugPrint(debugInfo.toString());
+                showDialog(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Geofence Debug Info'),
+                    content: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('Current: ${debugInfo['current_latitude']}, ${debugInfo['current_longitude']}'),
+                          Text('Office: ${debugInfo['office_latitude']}, ${debugInfo['office_longitude']}'),
+                          Text('Distance: ${debugInfo['distance']?.toStringAsFixed(2)} meters'),
+                          Text('Radius: ${debugInfo['geofence_radius']} meters'),
+                          Text('Within Geofence: ${debugInfo['within_geofence']}'),
+                        ],
+                      ),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('OK'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Debug Geofence'),
+            ),
+          ),
+
+          // Check In/Out button
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             child: SizedBox(
               width: double.infinity,
               height: 50,
               child: ElevatedButton(
-                onPressed: _handleCheckInOut,
+                onPressed: (!_isCheckedIn && !_isWithinGeofence)
+                    ? null  // Disable the button if trying to check in while outside geofence
+                    : _handleCheckInOut,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF4CAF50), // Green button
+                  backgroundColor: (!_isCheckedIn && !_isWithinGeofence)
+                      ? Colors.grey
+                      : const Color(0xFF4CAF50), // Green button or grey if disabled
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8),
@@ -530,6 +712,63 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       ),
     );
   }
+
+  Future<void> _testWithHardcodedCoordinates() async {
+    // Test with hardcoded coordinates that are very close to the office
+    // These should be within the geofence radius
+    double testLat = 24.985454; // Exact same as office (for testing)
+    double testLng = 55.175509; // Exact same as office (for testing)
+
+    // Test distance calculation directly
+    double distanceToOffice = Geolocator.distanceBetween(
+        testLat, testLng,
+        GeofenceUtil.officeLatitude, GeofenceUtil.officeLongitude
+    );
+
+    // Calculate a 10-meter offset for another test case
+    double testLat2 = 24.985554; // Slightly different
+    double testLng2 = 55.175609; // Slightly different
+
+    double distanceToOffice2 = Geolocator.distanceBetween(
+        testLat2, testLng2,
+        GeofenceUtil.officeLatitude, GeofenceUtil.officeLongitude
+    );
+
+    // Show test results in a dialog
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Hardcoded Coordinate Tests'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Test Case 1: Exact Match'),
+              Text('Test: $testLat, $testLng'),
+              Text('Office: ${GeofenceUtil.officeLatitude}, ${GeofenceUtil.officeLongitude}'),
+              Text('Distance: ${distanceToOffice.toStringAsFixed(2)} meters'),
+              Text('Within Radius: ${distanceToOffice <= GeofenceUtil.geofenceRadius}'),
+              const Divider(),
+              const Text('Test Case 2: Slight Offset'),
+              Text('Test: $testLat2, $testLng2'),
+              Text('Office: ${GeofenceUtil.officeLatitude}, ${GeofenceUtil.officeLongitude}'),
+              Text('Distance: ${distanceToOffice2.toStringAsFixed(2)} meters'),
+              Text('Within Radius: ${distanceToOffice2 <= GeofenceUtil.geofenceRadius}'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+
 
   Widget _buildTabbedContent() {
     return Column(
@@ -616,6 +855,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
               ? (activity['checkOut'] as Timestamp).toDate()
               : null;
           String status = activity['workStatus'] ?? 'Unknown';
+          String location = activity['location'] ?? 'Unknown';
 
           return Container(
             margin: const EdgeInsets.only(bottom: 8),
@@ -662,6 +902,14 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Location: $location',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600
+                    ),
                   ),
                 ],
               ),
@@ -722,6 +970,20 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
           ),
 
           _buildMenuOption(
+            icon: Icons.location_on_outlined,
+            title: 'Geofence Status',
+            subtitle: _isCheckingLocation
+                ? 'Checking location...'
+                : _isWithinGeofence
+                ? 'Within office area'
+                : 'Outside office area',
+            onTap: _checkGeofenceStatus,
+            showStatusIcon: true,
+            statusIcon: _isWithinGeofence ? Icons.check_circle : Icons.cancel,
+            statusColor: _isWithinGeofence ? Colors.green : Colors.red,
+          ),
+
+          _buildMenuOption(
             icon: Icons.settings_outlined,
             title: 'Settings',
             onTap: () {
@@ -773,12 +1035,16 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   Widget _buildMenuOption({
     required IconData icon,
     required String title,
+    String? subtitle,
     VoidCallback? onTap,
     bool hasToggle = false,
     bool toggleValue = false,
     Function(bool)? onToggleChanged,
     Color iconColor = Colors.black54,
     Color textColor = Colors.black87,
+    bool showStatusIcon = false,
+    IconData? statusIcon,
+    Color? statusColor,
   }) {
     // Adjust colors for dark mode
     if (_isDarkMode) {
@@ -817,22 +1083,44 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                 ),
               ),
               const SizedBox(width: 16),
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                  color: textColor,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                        color: textColor,
+                      ),
+                    ),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-              const Spacer(),
+              if (showStatusIcon && statusIcon != null)
+                Icon(
+                  statusIcon,
+                  color: statusColor,
+                  size: 16,
+                ),
               if (hasToggle)
                 Switch(
                   value: toggleValue,
                   onChanged: onToggleChanged,
                   activeColor: accentColor,
                 )
-              else
+              else if (!showStatusIcon)
                 Icon(
                   Icons.arrow_forward_ios,
                   size: 16,
