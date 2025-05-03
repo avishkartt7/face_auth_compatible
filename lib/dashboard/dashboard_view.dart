@@ -21,6 +21,7 @@ import 'package:face_auth_compatible/common/widgets/connectivity_banner.dart';
 import 'package:face_auth_compatible/repositories/attendance_repository.dart';
 import 'package:face_auth_compatible/repositories/location_repository.dart';
 import 'package:face_auth_compatible/services/sync_service.dart';
+import 'package:face_auth_compatible/services/service_locator.dart';
 
 class DashboardView extends StatefulWidget {
   final String employeeId;
@@ -64,12 +65,11 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     super.initState();
     _loadDarkModePreference();
 
-    // Initialize services for offline support
-    _connectivityService = ConnectivityService();
-    _attendanceRepository = AttendanceRepository();
-    _locationRepository = LocationRepository();
-    _syncService = SyncService();
-    _syncService.initialize();
+    // Get instances from service locator
+    _connectivityService = getIt<ConnectivityService>();
+    _attendanceRepository = getIt<AttendanceRepository>();
+    _locationRepository = getIt<LocationRepository>();
+    _syncService = getIt<SyncService>();
 
     // Listen to connectivity changes to show sync status
     _connectivityService.connectionStatusStream.listen((status) {
@@ -86,19 +86,13 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       }
     });
 
-    // Continue with normal initialization
+    // Rest of your initialization code remains the same
     _fetchUserData();
     _fetchAttendanceStatus();
     _fetchRecentActivity();
     _tabController = TabController(length: 2, vsync: this);
-
-    // Check geofence status when the dashboard loads
     _checkGeofenceStatus();
-
-    // Initialize date and time
     _updateDateTime();
-
-    // Set up a timer to update time every minute
     Future.delayed(const Duration(seconds: 1), () {
       if (mounted) _updateDateTime();
     });
@@ -241,6 +235,16 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       await prefs.setString('user_data_${widget.employeeId}', jsonEncode(userData));
     } catch (e) {
       debugPrint('Error saving user data locally: $e');
+    }
+  }
+
+  // Save employee image locally for offline face verification
+  Future<void> _saveEmployeeImageLocally(String employeeId, String imageBase64) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('employee_image_$employeeId', imageBase64);
+    } catch (e) {
+      print("Error saving employee image locally: $e");
     }
   }
 
@@ -884,39 +888,39 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
 
   Widget _buildDateTimeWithoutStrip() {
     return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        color: _isDarkMode ? const Color(0xFF1E1E1E) : Colors.white,
-        child: Row(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: _isDarkMode ? const Color(0xFF1E1E1E) : Colors.white,
+      child: Row(
         children: [
-        Icon(
-        Icons.calendar_today,
-        size: 16,
-        color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600
-    ),
-    const SizedBox(width: 8),
-    Text(
-    _formattedDate,
-    style: TextStyle(
-    fontSize: 14,
-    color: _isDarkMode ? Colors.grey.shade300 : Colors.grey.shade700,
-    ),
-    ),
-    const Spacer(),
-    Icon(
-    Icons.access_time,
-    size: 16,
-    color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600
-    ),
-    const SizedBox(width: 4),
-    Text(
-    _currentTime,
-    style: TextStyle(
-    fontSize: 14,
-    color: _isDarkMode ? Colors.grey.shade300 : Colors.grey.shade700,
-    ),
-    ),
-    ],
-        ),
+          Icon(
+              Icons.calendar_today,
+              size: 16,
+              color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _formattedDate,
+            style: TextStyle(
+              fontSize: 14,
+              color: _isDarkMode ? Colors.grey.shade300 : Colors.grey.shade700,
+            ),
+          ),
+          const Spacer(),
+          Icon(
+              Icons.access_time,
+              size: 16,
+              color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600
+          ),
+          const SizedBox(width: 4),
+          Text(
+            _currentTime,
+            style: TextStyle(
+              fontSize: 14,
+              color: _isDarkMode ? Colors.grey.shade300 : Colors.grey.shade700,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

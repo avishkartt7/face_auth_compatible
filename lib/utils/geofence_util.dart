@@ -297,4 +297,70 @@ class GeofenceUtil {
 
     return result;
   }
+
+  // Helper extension method for GeofenceUtil to use location list
+  static Future<Map<String, dynamic>> checkGeofenceStatusWithLocations(
+      BuildContext context,
+      List<LocationModel> locations
+      ) async {
+    bool hasPermission = await checkLocationPermission(context);
+    if (!hasPermission) {
+      return {
+        'withinGeofence': false,
+        'location': null,
+        'distance': null,
+      };
+    }
+
+    Position? currentPosition = await getCurrentPosition();
+    if (currentPosition == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to get current location'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return {
+        'withinGeofence': false,
+        'location': null,
+        'distance': null,
+      };
+    }
+
+    // Find closest location and check if within radius
+    LocationModel? closestLocation;
+    double? shortestDistance;
+    bool withinAnyGeofence = false;
+
+    for (var location in locations) {
+      double distanceInMeters = Geolocator.distanceBetween(
+        currentPosition.latitude,
+        currentPosition.longitude,
+        location.latitude,
+        location.longitude,
+      );
+
+      // Update closest location if this is closer than previous
+      if (shortestDistance == null || distanceInMeters < shortestDistance) {
+        shortestDistance = distanceInMeters;
+        closestLocation = location;
+      }
+
+      // Check if within this location's radius
+      if (distanceInMeters <= location.radius) {
+        withinAnyGeofence = true;
+        // If within radius, prioritize this location
+        closestLocation = location;
+        shortestDistance = distanceInMeters;
+        break; // Optimization: we found a matching location, no need to check others
+      }
+    }
+
+    // Return result
+    return {
+      'withinGeofence': withinAnyGeofence,
+      'location': closestLocation,
+      'distance': shortestDistance,
+    };
+  }
 }

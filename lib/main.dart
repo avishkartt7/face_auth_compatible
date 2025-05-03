@@ -49,38 +49,12 @@ class _MyAppState extends State<MyApp> {
   bool? _showOnboarding;
   String? _loggedInEmployeeId;
 
-  // Services for offline functionality
-  late SyncService _syncService;
-  late ConnectivityService _connectivityService;
-
   @override
   void initState() {
     super.initState();
-    _initializeServices();
     _checkLoginStatus();
     _initializeLocationData();
     _initializeAdminAccount();
-  }
-
-  // Initialize services for offline functionality
-  void _initializeServices() {
-    _connectivityService = ConnectivityService();
-    _syncService = SyncService();
-    _syncService.initialize();
-
-    // Listen for connectivity changes
-    _connectivityService.connectionStatusStream.listen((status) {
-      if (status == ConnectionStatus.online) {
-        // Synchronize when coming back online
-        _syncService.syncData();
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _syncService.dispose();
-    super.dispose();
   }
 
   Future<void> _checkLoginStatus() async {
@@ -109,7 +83,7 @@ class _MyAppState extends State<MyApp> {
       }
 
       // If not found locally or online mode, check Firestore
-      if (_connectivityService.currentStatus == ConnectionStatus.online) {
+      if (getIt<ConnectivityService>().currentStatus == ConnectionStatus.online) {
         try {
           DocumentSnapshot doc = await FirebaseFirestore.instance
               .collection('employees')
@@ -133,7 +107,7 @@ class _MyAppState extends State<MyApp> {
     }
 
     // Check if any user is registered - locally first if offline
-    if (_connectivityService.currentStatus == ConnectionStatus.offline) {
+    if (getIt<ConnectivityService>().currentStatus == ConnectionStatus.offline) {
       bool hasRegisteredUsers = await _checkRegisteredUsersLocally();
       setState(() {
         _showOnboarding = !hasRegisteredUsers;
@@ -199,7 +173,7 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> _initializeLocationData() async {
     // Only run this if online
-    if (_connectivityService.currentStatus == ConnectionStatus.offline) {
+    if (getIt<ConnectivityService>().currentStatus == ConnectionStatus.offline) {
       return;
     }
 
@@ -230,7 +204,7 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> _initializeAdminAccount() async {
     // Only run this if online
-    if (_connectivityService.currentStatus == ConnectionStatus.offline) {
+    if (getIt<ConnectivityService>().currentStatus == ConnectionStatus.offline) {
       return;
     }
 
