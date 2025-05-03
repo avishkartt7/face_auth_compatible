@@ -73,6 +73,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
 
     // Listen to connectivity changes to show sync status
     _connectivityService.connectionStatusStream.listen((status) {
+      debugPrint("Connectivity status changed: $status");
       if (status == ConnectionStatus.online && _needsSync) {
         _syncService.syncData().then((_) {
           // Refresh data after sync
@@ -195,10 +196,17 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
           Map<String, dynamic> data = snapshot.data() as Map<String, dynamic>;
           await _saveUserDataLocally(data);
 
+          // Also save the face image separately for better offline access
+          if (data.containsKey('image') && data['image'] != null) {
+            await _saveEmployeeImageLocally(widget.employeeId, data['image']);
+          }
+
           setState(() {
             _userData = data;
             _isLoading = false;
           });
+
+          debugPrint("Fetched user data from Firestore and cached locally");
         } else {
           setState(() {
             _isLoading = false;
@@ -213,6 +221,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
             _userData = userData;
             _isLoading = false;
           });
+          debugPrint("Using cached user data in offline mode");
         } else {
           setState(() {
             _isLoading = false;
@@ -221,10 +230,21 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
         }
       }
     } catch (e) {
+      debugPrint("Error fetching user data: $e");
       setState(() {
         _isLoading = false;
       });
-      CustomSnackBar.errorSnackBar("Error fetching user data: $e");
+
+      // Try to get from local storage as fallback
+      Map<String, dynamic>? userData = await _getUserDataLocally();
+      if (userData != null) {
+        setState(() {
+          _userData = userData;
+        });
+        debugPrint("Using cached user data after error");
+      } else {
+        CustomSnackBar.errorSnackBar("Error fetching user data: $e");
+      }
     }
   }
 
@@ -233,6 +253,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       await prefs.setString('user_data_${widget.employeeId}', jsonEncode(userData));
+      debugPrint("User data saved locally for ID: ${widget.employeeId}");
     } catch (e) {
       debugPrint('Error saving user data locally: $e');
     }
@@ -243,8 +264,9 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('employee_image_$employeeId', imageBase64);
+      debugPrint("Employee image saved locally for ID: $employeeId");
     } catch (e) {
-      print("Error saving employee image locally: $e");
+      debugPrint("Error saving employee image locally: $e");
     }
   }
 
@@ -254,6 +276,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       String? userData = prefs.getString('user_data_${widget.employeeId}');
       if (userData != null) {
+        debugPrint("Retrieved user data from local storage for ID: ${widget.employeeId}");
         return jsonDecode(userData) as Map<String, dynamic>;
       }
     } catch (e) {
@@ -287,6 +310,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
 
           // Cache the attendance status
           await _saveAttendanceStatusLocally(today, data);
+          debugPrint("Fetched and cached attendance status");
         } else {
           setState(() {
             _isCheckedIn = false;
@@ -306,6 +330,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
               _checkInTime = DateTime.parse(attendanceData['checkIn']);
             }
           });
+          debugPrint("Using cached attendance status in offline mode");
         } else {
           // Check database for pending records
           final localAttendance = await _attendanceRepository.getTodaysAttendance(widget.employeeId);
@@ -316,6 +341,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                 _checkInTime = DateTime.parse(localAttendance.checkIn!);
               }
             });
+            debugPrint("Using attendance from local database");
           } else {
             setState(() {
               _isCheckedIn = false;
@@ -325,7 +351,20 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
         }
       }
     } catch (e) {
-      print("Error fetching attendance: $e");
+      debugPrint("Error fetching attendance: $e");
+
+      // Try local storage as fallback
+      String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      Map<String, dynamic>? attendanceData = await _getAttendanceStatusLocally(today);
+      if (attendanceData != null) {
+        setState(() {
+          _isCheckedIn = attendanceData['checkIn'] != null;
+          if (_isCheckedIn && attendanceData['checkIn'] != null) {
+            _checkInTime = DateTime.parse(attendanceData['checkIn']);
+          }
+        });
+        debugPrint("Using cached attendance status after error");
+      }
     }
   }
 
@@ -341,6 +380,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
         data['checkOut'] = (data['checkOut'] as Timestamp).toDate().toIso8601String();
       }
       await prefs.setString('attendance_${widget.employeeId}_$date', jsonEncode(data));
+      debugPrint("Attendance status saved locally for date: $date");
     } catch (e) {
       debugPrint('Error saving attendance status locally: $e');
     }
@@ -352,6 +392,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       String? attendanceData = prefs.getString('attendance_${widget.employeeId}_$date');
       if (attendanceData != null) {
+        debugPrint("Retrieved attendance status from local storage for date: $date");
         return jsonDecode(attendanceData) as Map<String, dynamic>;
       }
     } catch (e) {
@@ -365,6 +406,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       await prefs.remove('attendance_${widget.employeeId}_$date');
+      debugPrint("Cleared attendance status from local storage for date: $date");
     } catch (e) {
       debugPrint('Error clearing attendance status locally: $e');
     }
@@ -398,9 +440,11 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
 
         // Cache recent activity
         await _saveRecentActivityLocally(activity);
+        debugPrint("Fetched and cached recent activity");
       } else {
         // Offline mode - get from local storage
         activity = await _getRecentActivityLocally() ?? [];
+        debugPrint("Using cached recent activity in offline mode");
 
         // If no cached data, try to get from local database
         if (activity.isEmpty) {
@@ -408,6 +452,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
           for (var record in localRecords) {
             activity.add(record.rawData);
           }
+          debugPrint("Retrieved ${activity.length} records from local database");
         }
       }
 
@@ -415,7 +460,16 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
         _recentActivity = activity;
       });
     } catch (e) {
-      print("Error fetching activity: $e");
+      debugPrint("Error fetching activity: $e");
+
+      // Try to get from local storage as fallback
+      final cachedActivity = await _getRecentActivityLocally();
+      if (cachedActivity != null && cachedActivity.isNotEmpty) {
+        setState(() {
+          _recentActivity = cachedActivity;
+        });
+        debugPrint("Using cached activity after error");
+      }
     }
   }
 
@@ -437,6 +491,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       }).toList();
 
       await prefs.setString('recent_activity_${widget.employeeId}', jsonEncode(processedActivity));
+      debugPrint("Recent activity saved locally");
     } catch (e) {
       debugPrint('Error saving recent activity locally: $e');
     }
@@ -448,6 +503,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       String? activityData = prefs.getString('recent_activity_${widget.employeeId}');
       if (activityData != null) {
+        debugPrint("Retrieved recent activity from local storage");
         final List<dynamic> decoded = jsonDecode(activityData);
         return decoded.map((item) => item as Map<String, dynamic>).toList();
       }
@@ -821,68 +877,68 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     String? imageBase64 = _userData?['image'];
 
     return Container(
-      padding: const EdgeInsets.all(16.0),
-      color: _isDarkMode ? const Color(0xFF1E1E1E) : Colors.white,
-      child: Row(
-        children: [
-          // Profile image
-          CircleAvatar(
-            radius: 25,
-            backgroundColor: _isDarkMode ? Colors.grey.shade800 : Colors.grey.shade200,
-            backgroundImage: imageBase64 != null
-                ? MemoryImage(base64Decode(imageBase64))
-                : null,
-            child: imageBase64 == null
-                ? Icon(
-              Icons.person,
-              color: _isDarkMode ? Colors.grey.shade300 : Colors.grey,
-            )
-                : null,
-          ),
+        padding: const EdgeInsets.all(16.0),
+    color: _isDarkMode ? const Color(0xFF1E1E1E) : Colors.white,
+    child: Row(
+    children: [
+    // Profile image
+    CircleAvatar(
+    radius: 25,
+    backgroundColor: _isDarkMode ? Colors.grey.shade800 : Colors.grey.shade200,
+    backgroundImage: imageBase64 != null
+        ? MemoryImage(base64Decode(imageBase64))
+        : null,
+      child: imageBase64 == null
+          ? Icon(
+        Icons.person,
+        color: _isDarkMode ? Colors.grey.shade300 : Colors.grey,
+      )
+          : null,
+    ),
 
-          const SizedBox(width: 12),
+      const SizedBox(width: 12),
 
-          // User info
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Welcome back,',
-                  style: TextStyle(
-                    color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600,
-                    fontSize: 14,
-                  ),
-                ),
-                Text(
-                  name.toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: _isDarkMode ? Colors.white : Colors.black,
-                  ),
-                ),
-                Text(
-                  designation,
-                  style: TextStyle(
-                    color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600,
-                    fontSize: 14,
-                  ),
-                ),
-              ],
+      // User info
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Welcome back,',
+              style: TextStyle(
+                color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600,
+                fontSize: 14,
+              ),
             ),
-          ),
-
-          // Settings icon
-          IconButton(
-            icon: Icon(
-              Icons.settings_outlined,
-              color: _isDarkMode ? Colors.white : Colors.black,
+            Text(
+              name.toUpperCase(),
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: _isDarkMode ? Colors.white : Colors.black,
+              ),
             ),
-            onPressed: () {},
-          ),
-        ],
+            Text(
+              designation,
+              style: TextStyle(
+                color: _isDarkMode ? Colors.grey.shade400 : Colors.grey.shade600,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
       ),
+
+      // Settings icon
+      IconButton(
+        icon: Icon(
+          Icons.settings_outlined,
+          color: _isDarkMode ? Colors.white : Colors.black,
+        ),
+        onPressed: () {},
+      ),
+    ],
+    ),
     );
   }
 
@@ -1030,6 +1086,30 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                     Text(
                       "Pending sync",
                       style: TextStyle(color: Colors.orange, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // Connection status indicator
+          if (_connectivityService.currentStatus == ConnectionStatus.offline)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.wifi_off, color: Colors.red, size: 14),
+                    SizedBox(width: 4),
+                    Text(
+                      "Offline Mode - Using cached data",
+                      style: TextStyle(color: Colors.red, fontSize: 12),
                     ),
                   ],
                 ),

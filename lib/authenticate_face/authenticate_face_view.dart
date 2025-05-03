@@ -19,6 +19,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_face_api/face_api.dart' as regula;
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class AuthenticateFaceView extends StatefulWidget {
   final String? employeeId; // Made optional for backward compatibility
@@ -56,32 +57,139 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
   Map<String, dynamic>? employeeData;
   bool isMatching = false;
   int trialNumber = 1;
+  bool _isOfflineMode = false;
 
   @override
   void initState() {
     super.initState();
+    // Check if we're in offline mode
+    _checkConnectivity();
+
     // If employeeId is provided, fetch that specific employee data
     if (widget.employeeId != null) {
       _fetchEmployeeData(widget.employeeId!);
     }
   }
 
+  Future<void> _checkConnectivity() async {
+    // This is a simplified check - in a real app you would use
+    // the ConnectivityService from your service_locator.dart
+    try {
+      await FirebaseFirestore.instance.collection('test').doc('test').get()
+          .timeout(const Duration(seconds: 5));
+      _isOfflineMode = false;
+    } catch (e) {
+      _isOfflineMode = true;
+      debugPrint("Operating in offline mode");
+    }
+  }
+
   Future<void> _fetchEmployeeData(String employeeId) async {
     try {
-      DocumentSnapshot doc = await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(employeeId)
-          .get();
+      if (!_isOfflineMode) {
+        // Online mode - try to fetch from Firestore
+        DocumentSnapshot doc = await FirebaseFirestore.instance
+            .collection('employees')
+            .doc(employeeId)
+            .get();
 
-      if (doc.exists) {
-        setState(() {
-          employeeData = doc.data() as Map<String, dynamic>;
-        });
+        if (doc.exists) {
+          Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+
+          // Save the data locally for offline access
+          await _saveUserDataLocally(employeeId, data);
+
+          // If has image, save it separately for better offline access
+          if (data.containsKey('image') && data['image'] != null) {
+            await _saveEmployeeImageLocally(employeeId, data['image']);
+          }
+
+          setState(() {
+            employeeData = data;
+          });
+
+          debugPrint("Fetched and cached employee data from Firestore");
+        } else {
+          CustomSnackBar.errorSnackBar("Employee data not found");
+        }
       } else {
-        CustomSnackBar.errorSnackBar("Employee data not found");
+        // Offline mode - try to get data from local storage
+        Map<String, dynamic>? localData = await _getUserDataLocally(employeeId);
+        if (localData != null) {
+          setState(() {
+            employeeData = localData;
+          });
+          debugPrint("Retrieved employee data from local storage");
+        } else {
+          CustomSnackBar.errorSnackBar("No cached employee data available");
+        }
       }
     } catch (e) {
-      CustomSnackBar.errorSnackBar("Error: $e");
+      debugPrint("Error fetching employee data: $e");
+      // Try to get from local storage as fallback
+      Map<String, dynamic>? localData = await _getUserDataLocally(employeeId);
+      if (localData != null) {
+        setState(() {
+          employeeData = localData;
+        });
+        debugPrint("Retrieved employee data from local storage after error");
+      } else {
+        CustomSnackBar.errorSnackBar("Error: $e");
+      }
+    }
+  }
+
+  // Save user data locally
+  Future<void> _saveUserDataLocally(String userId, Map<String, dynamic> userData) async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setString('user_data_$userId', jsonEncode(userData));
+      debugPrint("Saved user data locally for ID: $userId");
+    } catch (e) {
+      debugPrint('Error saving user data locally: $e');
+    }
+  }
+
+  // Get locally stored user data
+  Future<Map<String, dynamic>?> _getUserDataLocally(String userId) async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      String? userData = prefs.getString('user_data_$userId');
+      if (userData != null) {
+        debugPrint("Retrieved local user data for ID: $userId");
+        return jsonDecode(userData) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      debugPrint('Error getting user data locally: $e');
+    }
+    return null;
+  }
+
+  // Save employee image for offline face auth
+  Future<void> _saveEmployeeImageLocally(String employeeId, String imageBase64) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('employee_image_$employeeId', imageBase64);
+      debugPrint("Saved employee image locally for ID: $employeeId");
+    } catch (e) {
+      debugPrint("Error saving employee image locally: $e");
+    }
+  }
+
+  // Get locally stored employee image
+  Future<String?> _getEmployeeImageLocally(String employeeId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      String? imageData = prefs.getString('employee_image_$employeeId');
+      if (imageData != null) {
+        debugPrint("Retrieved local employee image for ID: $employeeId");
+      } else {
+        debugPrint("No local employee image found for ID: $employeeId");
+      }
+      return imageData;
+    } catch (e) {
+      debugPrint("Error getting employee image locally: $e");
+      return null;
     }
   }
 
@@ -151,6 +259,31 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
                             fontWeight: FontWeight.w500,
                           ),
                           textAlign: TextAlign.center,
+                        ),
+                      ),
+                    if (_isOfflineMode)
+                      Padding(
+                        padding: EdgeInsets.only(bottom: 0.01.sh),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.offline_bolt, color: Colors.orange, size: 20),
+                              SizedBox(width: 8),
+                              Text(
+                                "Offline Mode - Using cached data",
+                                style: TextStyle(
+                                  color: Colors.orange,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     Container(
@@ -285,48 +418,130 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
 
   Future<void> _fetchEmployeeByPin(String pin) async {
     try {
-      final QuerySnapshot snapshot = await FirebaseFirestore.instance
-          .collection('employees')
-          .where('pin', isEqualTo: pin)
-          .limit(1)
-          .get();
+      if (!_isOfflineMode) {
+        // Online mode - query Firestore
+        final QuerySnapshot snapshot = await FirebaseFirestore.instance
+            .collection('employees')
+            .where('pin', isEqualTo: pin)
+            .limit(1)
+            .get();
 
-      if (snapshot.docs.isEmpty) {
-        setState(() => isMatching = false);
-        _playFailedAudio;
-        CustomSnackBar.errorSnackBar("Invalid PIN. Please try again.");
-        return;
+        if (snapshot.docs.isEmpty) {
+          setState(() => isMatching = false);
+          _playFailedAudio;
+          CustomSnackBar.errorSnackBar("Invalid PIN. Please try again.");
+          return;
+        }
+
+        // Get the employee document and ID
+        final DocumentSnapshot employeeDoc = snapshot.docs.first;
+        final String employeeId = employeeDoc.id;
+        final Map<String, dynamic> data = employeeDoc.data() as Map<String, dynamic>;
+
+        // Save for offline use
+        await _saveUserDataLocally(employeeId, data);
+        if (data.containsKey('image') && data['image'] != null) {
+          await _saveEmployeeImageLocally(employeeId, data['image']);
+        }
+
+        // Set the employee data
+        setState(() {
+          employeeData = data;
+        });
+
+        // Proceed with face matching
+        _matchFaceWithStored();
+      } else {
+        // Offline mode - we need to scan local storage for matching PIN
+        // This is a simplified approach - a proper implementation would use a local database
+        final SharedPreferences prefs = await SharedPreferences.getInstance();
+        Set<String> keys = prefs.getKeys();
+
+        String? matchedEmployeeId;
+        Map<String, dynamic>? matchedData;
+
+        // Look for user data entries
+        for (String key in keys) {
+          if (key.startsWith('user_data_')) {
+            String? userData = prefs.getString(key);
+            if (userData != null) {
+              Map<String, dynamic> data = jsonDecode(userData) as Map<String, dynamic>;
+              if (data['pin'] == pin) {
+                matchedEmployeeId = key.replaceFirst('user_data_', '');
+                matchedData = data;
+                break;
+              }
+            }
+          }
+        }
+
+        if (matchedEmployeeId == null || matchedData == null) {
+          setState(() => isMatching = false);
+          _playFailedAudio;
+          CustomSnackBar.errorSnackBar("Invalid PIN or no cached data available");
+          return;
+        }
+
+        // Set the employee data
+        setState(() {
+          employeeData = matchedData;
+        });
+
+        // Proceed with face matching
+        _matchFaceWithStored();
       }
-
-      // Get the employee document
-      final employeeDoc = snapshot.docs.first;
-      final String employeeId = employeeDoc.id;
-
-      // Set the employee data
-      setState(() {
-        employeeData = employeeDoc.data() as Map<String, dynamic>;
-      });
-
-      // Proceed with face matching
-      _matchFaceWithStored();
     } catch (e) {
+      debugPrint("Error in _fetchEmployeeByPin: $e");
       setState(() => isMatching = false);
       _playFailedAudio;
-      CustomSnackBar.errorSnackBar("Error: $e");
+      CustomSnackBar.errorSnackBar("Error verifying PIN: $e");
     }
   }
 
   Future<void> _matchFaceWithStored() async {
-    if (employeeData == null || !employeeData!.containsKey('image')) {
+    debugPrint("Starting face matching process...");
+    debugPrint("Offline mode: $_isOfflineMode");
+    debugPrint("Employee data null? ${employeeData == null}");
+    if (employeeData != null) {
+      debugPrint("Employee data has image? ${employeeData!.containsKey('image')}");
+      if (employeeData!.containsKey('image')) {
+        debugPrint("Image data length: ${employeeData!['image']?.length ?? 'null'}");
+      }
+    }
+
+    // First check if we have the image data in the employee data
+    bool hasImageData = employeeData != null &&
+        employeeData!.containsKey('image') &&
+        employeeData!['image'] != null;
+
+    String? storedImage;
+
+    if (!hasImageData && widget.employeeId != null) {
+      // Try to get image from local storage as a fallback
+      debugPrint("Image not in employee data, trying local storage");
+      storedImage = await _getEmployeeImageLocally(widget.employeeId!);
+      hasImageData = storedImage != null;
+    }
+
+    if (!hasImageData) {
+      debugPrint("No face image found for authentication");
       _showFailureDialog(
-        title: "Registration Error",
-        description: "No registered face found for this employee.",
+        title: "Authentication Error",
+        description: "No registered face found for this employee. Please ensure face registration is complete.",
       );
       return;
     }
 
-    // Get the stored face image
-    image1.bitmap = employeeData!['image'];
+    // Set up the stored face image
+    if (storedImage != null) {
+      // Using image from local storage
+      debugPrint("Using locally stored image for face matching");
+      image1.bitmap = storedImage;
+    } else {
+      // Using image from employee data
+      debugPrint("Using image from employee data for face matching");
+      image1.bitmap = employeeData!['image'];
+    }
     image1.imageType = regula.ImageType.PRINTED;
 
     // Face comparing logic
@@ -334,6 +549,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
     request.images = [image1, image2];
 
     try {
+      debugPrint("Starting face matching with Regula SDK");
       dynamic value = await regula.FaceSDK.matchFaces(jsonEncode(request));
       var response = regula.MatchFacesResponse.fromJson(json.decode(value));
 
@@ -346,11 +562,12 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
         _similarity = split!.matchedFaces.isNotEmpty
             ? (split.matchedFaces[0]!.similarity! * 100).toStringAsFixed(2)
             : "error";
-        log("similarity: $_similarity");
+        log("Face similarity: $_similarity");
       });
 
       // Check if faces match
       if (_similarity != "error" && double.parse(_similarity) > 90.00) {
+        debugPrint("Face authentication successful! Similarity: $_similarity");
         _audioPlayer
           ..stop()
           ..setReleaseMode(ReleaseMode.release)
@@ -385,6 +602,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
         }
       } else {
         // Face doesn't match
+        debugPrint("Face authentication failed! Similarity: $_similarity");
         _showFailureDialog(
           title: "Authentication Failed",
           description: "Face doesn't match. Please try again.",
@@ -396,6 +614,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
         }
       }
     } catch (e) {
+      debugPrint("Error during face matching: $e");
       setState(() => isMatching = false);
       _playFailedAudio;
       CustomSnackBar.errorSnackBar("Error during face matching: $e");
