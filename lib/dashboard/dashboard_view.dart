@@ -182,21 +182,40 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   }
 
   Future<void> _fetchUserData() async {
+    setState(() => _isLoading = true);
+
     try {
-      // Check if we're online
+      // First try to get from local storage
+      Map<String, dynamic>? localData = await _getUserDataLocally();
+
+      if (localData != null) {
+        setState(() {
+          _userData = localData;
+          // Show local data immediately
+          _isLoading = false;
+        });
+
+        // If offline, stop here - we've shown cached data
+        if (_connectivityService.currentStatus == ConnectionStatus.offline) {
+          debugPrint("Using cached user data in offline mode");
+          return;
+        }
+      }
+
+      // If online, try to get fresh data from Firestore
       if (_connectivityService.currentStatus == ConnectionStatus.online) {
-        // Fetch from Firestore
         DocumentSnapshot snapshot = await FirebaseFirestore.instance
             .collection('employees')
             .doc(widget.employeeId)
             .get();
 
         if (snapshot.exists) {
-          // Save to local database for offline access
           Map<String, dynamic> data = snapshot.data() as Map<String, dynamic>;
+
+          // Save the data locally for future offline access
           await _saveUserDataLocally(data);
 
-          // Also save the face image separately for better offline access
+          // Also save the face image separately if it exists
           if (data.containsKey('image') && data['image'] != null) {
             await _saveEmployeeImageLocally(widget.employeeId, data['image']);
           }
@@ -206,43 +225,21 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
             _isLoading = false;
           });
 
-          debugPrint("Fetched user data from Firestore and cached locally");
+          debugPrint("Updated with fresh data from Firestore");
         } else {
-          setState(() {
-            _isLoading = false;
-          });
-          CustomSnackBar.errorSnackBar("User data not found");
-        }
-      } else {
-        // Offline mode - get from local storage
-        Map<String, dynamic>? userData = await _getUserDataLocally();
-        if (userData != null) {
-          setState(() {
-            _userData = userData;
-            _isLoading = false;
-          });
-          debugPrint("Using cached user data in offline mode");
-        } else {
-          setState(() {
-            _isLoading = false;
-          });
-          CustomSnackBar.errorSnackBar("No cached user data available");
+          // Only show this error if we don't have local data already showing
+          if (localData == null) {
+            setState(() => _isLoading = false);
+            CustomSnackBar.errorSnackBar("User data not found");
+          }
         }
       }
     } catch (e) {
       debugPrint("Error fetching user data: $e");
-      setState(() {
-        _isLoading = false;
-      });
 
-      // Try to get from local storage as fallback
-      Map<String, dynamic>? userData = await _getUserDataLocally();
-      if (userData != null) {
-        setState(() {
-          _userData = userData;
-        });
-        debugPrint("Using cached user data after error");
-      } else {
+      // Only update loading state if we don't have local data already showing
+      if (_userData == null) {
+        setState(() => _isLoading = false);
         CustomSnackBar.errorSnackBar("Error fetching user data: $e");
       }
     }
@@ -251,8 +248,21 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   // New method to save user data locally
   Future<void> _saveUserDataLocally(Map<String, dynamic> userData) async {
     try {
+      // Create a deep copy of the data that we can modify
+      Map<String, dynamic> dataCopy = Map<String, dynamic>.from(userData);
+
+      // Convert all Timestamp objects to ISO8601 strings
+      dataCopy.forEach((key, value) {
+        if (value is Timestamp) {
+          dataCopy[key] = value.toDate().toIso8601String();
+        }
+      });
+
+      // Now save the converted data
       final SharedPreferences prefs = await SharedPreferences.getInstance();
-      await prefs.setString('user_data_${widget.employeeId}', jsonEncode(userData));
+      await prefs.setString('user_data_${widget.employeeId}', jsonEncode(dataCopy));
+      await prefs.setString('user_name_${widget.employeeId}', userData['name'] ?? '');
+
       debugPrint("User data saved locally for ID: ${widget.employeeId}");
     } catch (e) {
       debugPrint('Error saving user data locally: $e');
@@ -275,14 +285,25 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       String? userData = prefs.getString('user_data_${widget.employeeId}');
+
       if (userData != null) {
-        debugPrint("Retrieved user data from local storage for ID: ${widget.employeeId}");
-        return jsonDecode(userData) as Map<String, dynamic>;
+        Map<String, dynamic> data = jsonDecode(userData) as Map<String, dynamic>;
+        debugPrint("Retrieved complete user data from local storage");
+        return data;
       }
+
+      // Fallback to individual fields
+      String? userName = prefs.getString('user_name_${widget.employeeId}');
+      if (userName != null && userName.isNotEmpty) {
+        return {'name': userName};
+      }
+
+      debugPrint("No local user data found for ID: ${widget.employeeId}");
+      return null;
     } catch (e) {
       debugPrint('Error getting user data locally: $e');
+      return null;
     }
-    return null;
   }
 
   Future<void> _fetchAttendanceStatus() async {

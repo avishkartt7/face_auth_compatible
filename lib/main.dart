@@ -1,5 +1,5 @@
 // lib/main.dart
-
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -150,11 +150,18 @@ class _MyAppState extends State<MyApp> {
   // Save user data locally
   Future<void> _saveUserDataLocally(String userId, Map<String, dynamic> userData) async {
     try {
-      SharedPreferences prefs = await SharedPreferences.getInstance();
-      // We simply store that the user exists - full data will be saved elsewhere
-      await prefs.setBool('user_exists_$userId', true);
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+
+      // Store the full data
+      await prefs.setString('user_data_$userId', jsonEncode(userData));
+
+      // Store critical fields separately for redundancy
+      await prefs.setString('user_name_$userId', userData['name'] ?? '');
+      await prefs.setString('user_designation_$userId', userData['designation'] ?? '');
+
+      debugPrint("User data saved locally for ID: $userId");
     } catch (e) {
-      print("Error saving user data locally: $e");
+      debugPrint('Error saving user data locally: $e');
     }
   }
 

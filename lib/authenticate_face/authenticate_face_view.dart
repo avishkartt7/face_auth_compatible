@@ -142,9 +142,27 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
   // Save user data locally
   Future<void> _saveUserDataLocally(String userId, Map<String, dynamic> userData) async {
     try {
+      // Store complete user details in SharedPreferences
       final SharedPreferences prefs = await SharedPreferences.getInstance();
+
+      // Save the full userData JSON
       await prefs.setString('user_data_$userId', jsonEncode(userData));
-      debugPrint("Saved user data locally for ID: $userId");
+
+      // Also save critical fields individually for faster access and recovery
+      await prefs.setString('user_name_$userId', userData['name'] ?? 'User');
+      await prefs.setString('user_designation_$userId', userData['designation'] ?? '');
+      await prefs.setString('user_department_$userId', userData['department'] ?? '');
+
+      // If image exists, save it separately (it can be large)
+      if (userData.containsKey('image') && userData['image'] != null) {
+        await prefs.setString('user_image_$userId', userData['image']);
+        // Remove image from the main data to avoid duplication
+        Map<String, dynamic> dataWithoutImage = Map<String, dynamic>.from(userData);
+        dataWithoutImage.remove('image');
+        await prefs.setString('user_data_no_image_$userId', jsonEncode(dataWithoutImage));
+      }
+
+      debugPrint("Saved comprehensive user data locally for ID: $userId");
     } catch (e) {
       debugPrint('Error saving user data locally: $e');
     }
@@ -154,15 +172,39 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
   Future<Map<String, dynamic>?> _getUserDataLocally(String userId) async {
     try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
-      String? userData = prefs.getString('user_data_$userId');
-      if (userData != null) {
-        debugPrint("Retrieved local user data for ID: $userId");
-        return jsonDecode(userData) as Map<String, dynamic>;
+
+      // Try to get complete data first
+      String? completeUserData = prefs.getString('user_data_$userId');
+      if (completeUserData != null) {
+        debugPrint("Retrieved complete local user data for ID: $userId");
+        return jsonDecode(completeUserData) as Map<String, dynamic>;
       }
+
+      // If complete data is missing, try to reconstruct from individual fields
+      String? userName = prefs.getString('user_name_$userId');
+      if (userName != null) {
+        debugPrint("Reconstructing user data from individual fields for ID: $userId");
+        Map<String, dynamic> reconstructedData = {
+          'name': userName,
+          'designation': prefs.getString('user_designation_$userId') ?? '',
+          'department': prefs.getString('user_department_$userId') ?? '',
+        };
+
+        // Try to get image separately
+        String? userImage = prefs.getString('user_image_$userId');
+        if (userImage != null) {
+          reconstructedData['image'] = userImage;
+        }
+
+        return reconstructedData;
+      }
+
+      debugPrint("No local user data found for ID: $userId");
+      return null;
     } catch (e) {
       debugPrint('Error getting user data locally: $e');
+      return null;
     }
-    return null;
   }
 
   // Save employee image for offline face auth
@@ -501,47 +543,42 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
   Future<void> _matchFaceWithStored() async {
     debugPrint("Starting face matching process...");
     debugPrint("Offline mode: $_isOfflineMode");
-    debugPrint("Employee data null? ${employeeData == null}");
-    if (employeeData != null) {
-      debugPrint("Employee data has image? ${employeeData!.containsKey('image')}");
-      if (employeeData!.containsKey('image')) {
-        debugPrint("Image data length: ${employeeData!['image']?.length ?? 'null'}");
+
+    // First try to get the image directly from local storage for fastest offline access
+    String? storedImage;
+    bool hasImageData = false;
+
+    if (widget.employeeId != null) {
+      // Always try local storage first in offline mode
+      storedImage = await _getEmployeeImageLocally(widget.employeeId!);
+      if (storedImage != null) {
+        hasImageData = true;
+        debugPrint("Using locally stored image from getEmployeeImageLocally()");
       }
     }
 
-    // First check if we have the image data in the employee data
-    bool hasImageData = employeeData != null &&
-        employeeData!.containsKey('image') &&
-        employeeData!['image'] != null;
-
-    String? storedImage;
-
-    if (!hasImageData && widget.employeeId != null) {
-      // Try to get image from local storage as a fallback
-      debugPrint("Image not in employee data, trying local storage");
-      storedImage = await _getEmployeeImageLocally(widget.employeeId!);
-      hasImageData = storedImage != null;
+    // If not found in local specific storage, check employee data
+    if (!hasImageData && employeeData != null) {
+      debugPrint("Employee data null? ${employeeData == null}");
+      if (employeeData!.containsKey('image') && employeeData!['image'] != null) {
+        debugPrint("Image found in employeeData, length: ${employeeData!['image']?.length ?? 'null'}");
+        storedImage = employeeData!['image'];
+        hasImageData = true;
+      }
     }
 
+    // If we still don't have image data, show failure
     if (!hasImageData) {
       debugPrint("No face image found for authentication");
       _showFailureDialog(
         title: "Authentication Error",
-        description: "No registered face found for this employee. Please ensure face registration is complete.",
+        description: "No registered face found for this employee. Please ensure face registration is complete or try again when online.",
       );
       return;
     }
 
-    // Set up the stored face image
-    if (storedImage != null) {
-      // Using image from local storage
-      debugPrint("Using locally stored image for face matching");
-      image1.bitmap = storedImage;
-    } else {
-      // Using image from employee data
-      debugPrint("Using image from employee data for face matching");
-      image1.bitmap = employeeData!['image'];
-    }
+    // Set up the stored face image for comparison
+    image1.bitmap = storedImage!;
     image1.imageType = regula.ImageType.PRINTED;
 
     // Face comparing logic
@@ -568,38 +605,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
       // Check if faces match
       if (_similarity != "error" && double.parse(_similarity) > 90.00) {
         debugPrint("Face authentication successful! Similarity: $_similarity");
-        _audioPlayer
-          ..stop()
-          ..setReleaseMode(ReleaseMode.release)
-          ..play(AssetSource("success.mp3"));
-
-        setState(() {
-          trialNumber = 1;
-          isMatching = false;
-        });
-
-        // Face authentication successful
-        if (widget.isRegistrationValidation) {
-          // If this is part of the registration flow, move to password setup
-          if (mounted) {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (context) => UserPasswordSetupView(
-                  employeeId: widget.employeeId!,
-                  employeePin: widget.employeePin!,
-                ),
-              ),
-            );
-          }
-        } else {
-          // If this is a regular authentication (like for check-in)
-          _showSuccessDialog();
-
-          // Call the callback if provided (for check-in process)
-          if (widget.onAuthenticationComplete != null) {
-            widget.onAuthenticationComplete!(true);
-          }
-        }
+        _handleSuccessfulAuthentication();
       } else {
         // Face doesn't match
         debugPrint("Face authentication failed! Similarity: $_similarity");
@@ -608,7 +614,6 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
           description: "Face doesn't match. Please try again.",
         );
 
-        // Call the callback with false if provided (for check-in process)
         if (widget.onAuthenticationComplete != null) {
           widget.onAuthenticationComplete!(false);
         }
@@ -619,9 +624,44 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
       _playFailedAudio;
       CustomSnackBar.errorSnackBar("Error during face matching: $e");
 
-      // Call the callback with false if provided (for check-in process)
       if (widget.onAuthenticationComplete != null) {
         widget.onAuthenticationComplete!(false);
+      }
+    }
+  }
+
+// Helper method for successful authentication
+  void _handleSuccessfulAuthentication() {
+    _audioPlayer
+      ..stop()
+      ..setReleaseMode(ReleaseMode.release)
+      ..play(AssetSource("success.mp3"));
+
+    setState(() {
+      trialNumber = 1;
+      isMatching = false;
+    });
+
+    // Face authentication successful
+    if (widget.isRegistrationValidation) {
+      // If this is part of the registration flow, move to password setup
+      if (mounted) {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => UserPasswordSetupView(
+              employeeId: widget.employeeId!,
+              employeePin: widget.employeePin!,
+            ),
+          ),
+        );
+      }
+    } else {
+      // If this is a regular authentication (like for check-in)
+      _showSuccessDialog();
+
+      // Call the callback if provided (for check-in process)
+      if (widget.onAuthenticationComplete != null) {
+        widget.onAuthenticationComplete!(true);
       }
     }
   }
