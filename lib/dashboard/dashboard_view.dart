@@ -269,6 +269,33 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     }
   }
 
+  // Save comprehensive employee data for offline auth
+  Future<void> _saveEmployeeDataLocally(String employeeId, Map<String, dynamic> data) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // Save the complete image string
+      if (data.containsKey('image') && data['image'] != null) {
+        await prefs.setString('employee_image_$employeeId', data['image']);
+        debugPrint("Saved employee image locally for ID: $employeeId");
+      }
+
+      // Save facial features specifically for authentication
+      if (data.containsKey('faceFeatures') && data['faceFeatures'] != null) {
+        await prefs.setString('employee_face_features_$employeeId',
+            jsonEncode(data['faceFeatures']));
+        debugPrint("Saved facial features locally for ID: $employeeId");
+      }
+
+      // Save the complete user data
+      await prefs.setString('user_data_$employeeId', jsonEncode(data));
+
+      debugPrint("Saved comprehensive user data locally for ID: $employeeId");
+    } catch (e) {
+      debugPrint('Error saving employee data locally: $e');
+    }
+  }
+
   // Save employee image locally for offline face verification
   Future<void> _saveEmployeeImageLocally(String employeeId, String imageBase64) async {
     try {
@@ -1894,3 +1921,4 @@ extension GeofenceUtilExtension on GeofenceUtil {
     };
   }
 }
+
