@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "430750432541",
-    "project_id": "face-authentication-app-6bd1e",
-    "storage_bucket": "face-authentication-app-6bd1e.firebasestorage.app"
+    "project_number": "541867932129",
+    "project_id": "face-authentication-app-44ddb",
+    "storage_bucket": "face-authentication-app-44ddb.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:430750432541:android:fffaf0b44ff48e8c4af5f4",
+        "mobilesdk_app_id": "1:541867932129:android:ed73e3859b053c1555faa0",
         "android_client_info": {
           "package_name": "com.example.face_auth_compatible"
         }
@@ -15,26 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyBG7z3Dm_hfL41VlKFGETwxO-9fxAVEqvw"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": []
-        }
-      }
-    },
-    {
-      "client_info": {
-        "mobilesdk_app_id": "1:430750432541:android:2ac34dd9c5c888964af5f4",
-        "android_client_info": {
-          "package_name": "com.example.face_authentication_app"
-        }
-      },
-      "oauth_client": [],
-      "api_key": [
-        {
-          "current_key": "AIzaSyBG7z3Dm_hfL41VlKFGETwxO-9fxAVEqvw"
+          "current_key": "AIzaSyC_cwJ2lBqsDMzWmGIlcBqyBb2BqP3I6aA"
         }
       ],
       "services": {

@@ -22,6 +22,7 @@ import 'package:face_auth_compatible/repositories/attendance_repository.dart';
 import 'package:face_auth_compatible/repositories/location_repository.dart';
 import 'package:face_auth_compatible/services/sync_service.dart';
 import 'package:face_auth_compatible/services/service_locator.dart';
+import 'package:face_auth_compatible/test/offline_test_view.dart';
 
 class DashboardView extends StatefulWidget {
   final String employeeId;
@@ -416,6 +417,37 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     }
   }
 
+  Future<void> _testOfflineAuthentication() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final storedImage = prefs.getString('employee_image_${widget.employeeId}');
+
+      if (storedImage == null || storedImage.isEmpty) {
+        CustomSnackBar.errorSnackBar("No stored face image found");
+        return;
+      }
+
+      // Check if image is in data URL format and fix it
+      String cleanedImage = storedImage;
+      bool wasFixed = false;
+
+      if (cleanedImage.contains('data:image') && cleanedImage.contains(',')) {
+        cleanedImage = cleanedImage.split(',')[1];
+        wasFixed = true;
+      }
+
+      // Save the fixed image if needed
+      if (wasFixed) {
+        await prefs.setString('employee_image_${widget.employeeId}', cleanedImage);
+        CustomSnackBar.successSnackBar("Fixed image format! Try authentication now");
+      } else {
+        CustomSnackBar.successSnackBar("Image format looks good! Length: ${cleanedImage.length}");
+      }
+    } catch (e) {
+      CustomSnackBar.errorSnackBar("Error: $e");
+    }
+  }
+
   // New method to save attendance status locally
   Future<void> _saveAttendanceStatusLocally(String date, Map<String, dynamic> data) async {
     try {
@@ -580,18 +612,18 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
         return;
       }
 
-      // Set authenticating flag to prevent multiple dialog opens
+      // Set authenticating flag
       setState(() {
         _isAuthenticating = true;
       });
 
-      // Launch face authentication for check-in
+      // Launch face authentication dialog
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (BuildContext context) {
+        builder: (context) {
           return WillPopScope(
-            onWillPop: () async => false, // Prevent back button from closing dialog
+            onWillPop: () async => false,
             child: Dialog(
               backgroundColor: Colors.transparent,
               elevation: 0,
@@ -1084,6 +1116,28 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                   ],
                 ),
 
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.bug_report),
+                    label: const Text("OFFLINE AUTH TEST"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+                    ),
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (context) => OfflineTestView(
+                            employeeId: widget.employeeId,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+
                 // Right side - Status indicator
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -1555,6 +1609,17 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                 ),
               );
             },
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.all(16),
+            ),
+            onPressed: () => _testOfflineAuthentication(),
+            child: const Text("TEST OFFLINE AUTHENTICATION",
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
           ),
 
           _buildMenuOption(
