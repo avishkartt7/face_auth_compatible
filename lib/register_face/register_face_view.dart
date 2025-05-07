@@ -1,7 +1,7 @@
 // lib/register_face/register_face_view.dart
 
 import 'dart:convert';
-
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:face_auth_compatible/common/utils/extract_face_feature.dart';
 import 'package:face_auth_compatible/common/views/camera_view.dart';
 import 'package:face_auth_compatible/common/views/custom_button.dart';
@@ -165,17 +165,31 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
     setState(() => isRegistering = true);
 
     try {
-      // Save face data to Firestore
+      // Make sure we have clean base64 data without data URL prefix
+      String cleanedImage = _image!;
+      if (cleanedImage.contains('data:image') && cleanedImage.contains(',')) {
+        cleanedImage = cleanedImage.split(',')[1];
+        debugPrint("Cleaned data URL format to pure base64");
+      }
+
+      // Save to Firestore
       await FirebaseFirestore.instance
           .collection('employees')
           .doc(widget.employeeId)
           .update({
-        'image': _image,
+        'image': cleanedImage,
         'faceFeatures': _faceFeatures!.toJson(),
         'faceRegistered': true,
       });
 
+      // Save locally for offline use
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('employee_image_${widget.employeeId}', cleanedImage);
+      debugPrint("Saved face image to SharedPreferences, length: ${cleanedImage.length}");
+
       setState(() => isRegistering = false);
+
+
 
       // Show success message
       ScaffoldMessenger.of(context).showSnackBar(
