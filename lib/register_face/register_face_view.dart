@@ -12,6 +12,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:face_auth_compatible/authenticate_face/authenticate_face_view.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+
+
 class RegisterFaceView extends StatefulWidget {
   final String employeeId;
   final String employeePin;
