@@ -1,6 +1,7 @@
 // lib/register_face/register_face_view.dart
 import 'dart:convert';
-import 'dart:typed_data'; // Add this import to fix the error
+import 'dart:typed_data';
+import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:face_auth_compatible/common/utils/extract_face_feature.dart';
 import 'package:face_auth_compatible/common/views/camera_view.dart';
@@ -12,7 +13,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:face_auth_compatible/authenticate_face/authenticate_face_view.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
-
+import 'package:path_provider/path_provider.dart';
+import 'package:flutter_face_api/face_api.dart' as regula;
 
 class RegisterFaceView extends StatefulWidget {
   final String employeeId;
@@ -113,7 +115,7 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
           children: [
             if (_isOfflineMode)
               Container(
-                margin: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 decoration: BoxDecoration(
                   color: Colors.orange.withOpacity(0.2),
@@ -198,6 +200,18 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
 
                       try {
                         _faceFeatures = await extractFaceFeatures(inputImage, _faceDetector);
+
+                        // Validate face features
+                        if (_faceFeatures == null) {
+                          throw Exception("Failed to extract face features");
+                        }
+
+                        // Verify face is properly detected
+                        bool hasValidFace = _validateFaceFeatures(_faceFeatures!);
+                        if (!hasValidFace) {
+                          throw Exception("Face features are incomplete - please try again with better lighting");
+                        }
+
                         setState(() {
                           _debugStatus = "Face features extracted successfully";
                         });
@@ -240,6 +254,16 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
         ),
       ),
     );
+  }
+
+  // Helper to validate face features have all required landmarks
+  bool _validateFaceFeatures(FaceFeatures features) {
+    // Check that at least essential features are present
+    bool hasEyes = features.leftEye?.x != null && features.rightEye?.x != null;
+    bool hasNose = features.noseBase?.x != null;
+    bool hasMouth = features.leftMouth?.x != null && features.rightMouth?.x != null;
+
+    return hasEyes && hasNose && hasMouth;
   }
 
   void _testImageQuality(String base64Image) {
@@ -341,6 +365,9 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
         return;
       }
 
+      // Also prepare to save image for Regula SDK (used in online mode)
+      await _prepareRegulaSdkImage(cleanedImage);
+
       // Proceed with saving to Firestore if online
       if (!_isOfflineMode) {
         debugPrint("FACE REG: Saving to Firestore (online mode)");
@@ -373,8 +400,18 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
 
       // Always save locally for offline use
       final prefs = await SharedPreferences.getInstance();
+
+      // 1. Save the base64 image for Regula SDK (online mode)
       await prefs.setString('employee_image_${widget.employeeId}', cleanedImage);
       debugPrint("FACE REG: Saved face image locally (length: ${cleanedImage.length}) in CLEAN base64 format");
+
+      // 2. Save the ML Kit face features for offline authentication
+      await prefs.setString('employee_face_features_${widget.employeeId}',
+          jsonEncode(_faceFeatures!.toJson()));
+      debugPrint("FACE REG: Saved ML Kit face features for offline authentication");
+
+      // 3. Save a face token to indicate registration is complete
+      await prefs.setBool('face_registered_${widget.employeeId}', true);
 
       // Test local storage immediately to verify
       final storedImage = prefs.getString('employee_image_${widget.employeeId}');
@@ -435,6 +472,20 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
     }
   }
 
+  // Prepare image for Regula SDK (used in online authentication)
+  Future<void> _prepareRegulaSdkImage(String base64Image) async {
+    try {
+      debugPrint("FACE REG: Preparing image for Regula SDK compatibility");
+
+      // We're not initializing or testing with Regula SDK during registration
+      // Just log that we're storing the image for online authentication later
+      debugPrint("FACE REG: Image prepared for future online authentication with Regula SDK");
+    } catch (e) {
+      debugPrint("FACE REG: Error preparing for Regula SDK: $e");
+      // Continue anyway as we'll rely on ML Kit for offline auth
+    }
+  }
+
   void _showDebugInfo() {
     showDialog(
       context: context,
@@ -451,6 +502,14 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
               _buildDebugInfoRow("Image Captured", (_image != null).toString()),
               _buildDebugInfoRow("Image Quality", _imageQuality),
               _buildDebugInfoRow("Face Features Extracted", (_faceFeatures != null).toString()),
+              if (_faceFeatures != null) ...[
+                _buildDebugInfoRow("  - Eyes Detected",
+                    "${_faceFeatures!.leftEye?.x != null && _faceFeatures!.rightEye?.x != null}"),
+                _buildDebugInfoRow("  - Nose Detected",
+                    "${_faceFeatures!.noseBase?.x != null}"),
+                _buildDebugInfoRow("  - Mouth Detected",
+                    "${_faceFeatures!.leftMouth?.x != null && _faceFeatures!.rightMouth?.x != null}"),
+              ],
               if (_image != null) ...[
                 const Divider(),
                 const Text("Image Details:", style: TextStyle(fontWeight: FontWeight.bold)),
@@ -494,6 +553,15 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
                       ],
                     ],
                   );
+                },
+              ),
+              FutureBuilder<String?>(
+                future: SharedPreferences.getInstance().then(
+                        (prefs) => prefs.getString('employee_face_features_${widget.employeeId}')
+                ),
+                builder: (context, snapshot) {
+                  return _buildDebugInfoRow("Stored Face Features",
+                      (snapshot.data != null && snapshot.data!.isNotEmpty).toString());
                 },
               ),
             ],
@@ -548,7 +616,7 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 120,
+            width: 150,
             child: Text(
               "$label:",
               style: const TextStyle(

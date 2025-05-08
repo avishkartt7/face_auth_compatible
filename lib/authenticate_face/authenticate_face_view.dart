@@ -2,7 +2,7 @@
 
 import 'dart:convert';
 import 'dart:developer';
-import 'dart:math' as math;
+import 'dart:math';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -66,6 +66,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
   String _lastThresholdUsed = "0.0";
   String _lastAuthResult = "Not attempted";
   bool _isLoading = false;
+  String _debugStatus = "Not started";
 
   @override
   void initState() {
@@ -303,9 +304,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
     }
   }
 
-  // New method to verify a face is detected in the camera image
-  // New implementation of _verifyFaceDetected() that doesn't use detectFaces
-  // Simpler approach that uses _faceFeatures from Google ML Kit
+  // Check if face is detected in the camera image
   Future<bool> _verifyFaceDetected() async {
     if (image2.bitmap == null || image2.bitmap!.isEmpty) {
       debugPrint("No camera image available for face detection");
@@ -321,7 +320,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
     return hasFace;
   }
 
-  // Replace your existing authentication start code with this
+  // Authentication initiation
   void _startAuthentication() async {
     setState(() => isMatching = true);
     _playScanningAudio;
@@ -800,7 +799,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
             ? (split.matchedFaces[0]!.similarity! * 100).toStringAsFixed(2)
             : "0.0";
         _lastSimilarityScore = _similarity;
-        log("Face similarity score: $_similarity%");
+        debugPrint("Face similarity score: $_similarity%");
       });
 
       // Check if faces match
@@ -846,18 +845,17 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
   }
 
   Future<void> _handleOfflineAuthentication() async {
-    debugPrint("Starting offline authentication with local face matching");
+    debugPrint("Starting offline authentication with ML Kit");
 
     try {
-      // Get stored image with detailed logging
-      final prefs = await SharedPreferences.getInstance();
-      final storedImage = prefs.getString('employee_image_${widget.employeeId}');
-
-      if (storedImage == null || storedImage.isEmpty) {
-        debugPrint("No stored face image found for offline authentication");
+      // First check if we have a face detected
+      if (_faceFeatures == null) {
+        debugPrint("No face features detected for offline authentication");
+        setState(() => isMatching = false);
+        _playFailedAudio;
         _showFailureDialog(
           title: "Authentication Failed",
-          description: "No stored face data found for offline authentication.",
+          description: "No face detected. Please try again with better lighting.",
         );
         if (widget.onAuthenticationComplete != null) {
           widget.onAuthenticationComplete!(false);
@@ -865,23 +863,101 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
         return;
       }
 
-      debugPrint("Found stored image, length: ${storedImage.length}");
+      // Get stored face features
+      final prefs = await SharedPreferences.getInstance();
+      String? storedFeaturesJson = prefs.getString('employee_face_features_${widget.employeeId}');
 
-      // Continue with face matching
-      await _matchFaceWithStored();
+      if (storedFeaturesJson == null || storedFeaturesJson.isEmpty) {
+        // Fall back to image comparison if no stored features
+        await _matchFaceWithStored();
+        return;
+      }
+
+      // Parse stored features
+      // Parse stored features
+      Map<String, dynamic> storedFeaturesMap = json.decode(storedFeaturesJson);
+      FaceFeatures storedFeatures = FaceFeatures.fromJson(storedFeaturesMap);
+
+      // Compare key facial features
+      bool hasMatchingLeftEye = _comparePoints(storedFeatures.leftEye, _faceFeatures!.leftEye, 50);
+      bool hasMatchingRightEye = _comparePoints(storedFeatures.rightEye, _faceFeatures!.rightEye, 50);
+      bool hasMatchingNose = _comparePoints(storedFeatures.noseBase, _faceFeatures!.noseBase, 50);
+      bool hasMatchingMouth = _comparePoints(storedFeatures.leftMouth, _faceFeatures!.leftMouth, 50) &&
+          _comparePoints(storedFeatures.rightMouth, _faceFeatures!.rightMouth, 50);
+
+      // Calculate match percentage
+      int matchCount = 0;
+      int totalTests = 4;
+
+      if (hasMatchingLeftEye) matchCount++;
+      if (hasMatchingRightEye) matchCount++;
+      if (hasMatchingNose) matchCount++;
+      if (hasMatchingMouth) matchCount++;
+
+      double matchPercentage = matchCount / totalTests * 100;
+
+      setState(() {
+        _similarity = matchPercentage.toStringAsFixed(2);
+        _lastSimilarityScore = _similarity;
+        _lastThresholdUsed = "75.0"; // We use 75% match threshold for offline
+      });
+
+      debugPrint("Offline face match: $matchPercentage% ($matchCount/$totalTests features matched)");
+
+      // Determine if match is successful
+      if (matchPercentage >= 75.0) { // 75% match threshold
+        debugPrint("Offline authentication successful!");
+        setState(() {
+          _lastAuthResult = "Success ($_similarity%)";
+        });
+        _handleSuccessfulAuthentication();
+      } else {
+        debugPrint("Offline authentication failed!");
+        setState(() {
+          _lastAuthResult = "Failed - Low similarity ($_similarity%)";
+          isMatching = false;
+        });
+        _playFailedAudio;
+        _showFailureDialog(
+          title: "Authentication Failed",
+          description: "Face doesn't match. Please try again.",
+        );
+
+        if (widget.onAuthenticationComplete != null) {
+          widget.onAuthenticationComplete!(false);
+        }
+      }
     } catch (e) {
       debugPrint("Error in offline face matching: $e");
-      setState(() => isMatching = false);
-      _playFailedAudio;
-      _showFailureDialog(
-        title: "Authentication Failed",
-        description: "Error during offline face matching: $e",
-      );
 
-      if (widget.onAuthenticationComplete != null) {
-        widget.onAuthenticationComplete!(false);
+      // Fall back to original method if our ML Kit approach fails
+      try {
+        await _matchFaceWithStored();
+      } catch (fallbackError) {
+        setState(() => isMatching = false);
+        _playFailedAudio;
+        _showFailureDialog(
+          title: "Authentication Failed",
+          description: "Error during face matching: $e",
+        );
+
+        if (widget.onAuthenticationComplete != null) {
+          widget.onAuthenticationComplete!(false);
+        }
       }
     }
+  }
+
+  // Helper method to compare two facial points with tolerance
+  bool _comparePoints(Points? p1, Points? p2, double tolerance) {
+    if (p1 == null || p2 == null || p1.x == null || p2.x == null) return false;
+
+    double distance = sqrt(
+        (p1.x! - p2.x!) * (p1.x! - p2.x!) +
+            (p1.y! - p2.y!) * (p1.y! - p2.y!)
+    );
+
+    return distance <= tolerance;
   }
 
   // Helper method for successful authentication
