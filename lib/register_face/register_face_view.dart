@@ -1,7 +1,4 @@
 // lib/register_face/register_face_view.dart
-
-// lib/register_face/register_face_view.dart
-
 import 'dart:convert';
 import 'dart:typed_data'; // Add this import to fix the error
 import 'package:shared_preferences/shared_preferences.dart';
