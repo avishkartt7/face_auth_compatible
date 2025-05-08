@@ -52,12 +52,20 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
   var image2 = regula.MatchFacesImage();
 
   final TextEditingController _pinController = TextEditingController();
-  String _similarity = "";
+  String _similarity = "0.0";
   bool _canAuthenticate = false;
   Map<String, dynamic>? employeeData;
   bool isMatching = false;
   int trialNumber = 1;
   bool _isOfflineMode = false;
+
+  // Debug information
+  bool _hasStoredFace = false;
+  int _storedImageSize = 0;
+  String _lastSimilarityScore = "0.0";
+  String _lastThresholdUsed = "0.0";
+  String _lastAuthResult = "Not attempted";
+  bool _isLoading = false;
 
   @override
   void initState() {
@@ -65,9 +73,32 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
     // Check if we're in offline mode
     _checkConnectivity();
 
+    // Check for stored face image
+    if (widget.employeeId != null) {
+      _checkStoredImage();
+    }
+
     // If employeeId is provided, fetch that specific employee data
     if (widget.employeeId != null) {
       _fetchEmployeeData(widget.employeeId!);
+    }
+  }
+
+  Future<void> _checkStoredImage() async {
+    try {
+      if (widget.employeeId == null) return;
+
+      final prefs = await SharedPreferences.getInstance();
+      String? storedImage = prefs.getString('employee_image_${widget.employeeId}');
+
+      setState(() {
+        _hasStoredFace = storedImage != null && storedImage.isNotEmpty;
+        _storedImageSize = storedImage?.length ?? 0;
+      });
+
+      debugPrint("Stored face check: exists=${_hasStoredFace}, size=${_storedImageSize} bytes");
+    } catch (e) {
+      debugPrint("Error checking stored image: $e");
     }
   }
 
@@ -77,31 +108,53 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
     try {
       await FirebaseFirestore.instance.collection('test').doc('test').get()
           .timeout(const Duration(seconds: 5));
-      _isOfflineMode = false;
+      setState(() {
+        _isOfflineMode = false;
+      });
     } catch (e) {
-      _isOfflineMode = true;
+      setState(() {
+        _isOfflineMode = true;
+      });
       debugPrint("Operating in offline mode");
     }
   }
 
   Future<void> _fetchEmployeeData(String employeeId) async {
     try {
+      // First try to get from local storage
+      Map<String, dynamic>? localData = await _getUserDataLocally(employeeId);
+
+      if (localData != null) {
+        setState(() {
+          employeeData = localData;
+          // Show local data immediately
+          _isLoading = false;
+        });
+
+        // If offline, stop here - we've shown cached data
+        if (_isOfflineMode) {
+          debugPrint("Using cached employee data in offline mode");
+          return;
+        }
+      }
+
+      // If online, try to get fresh data from Firestore
       if (!_isOfflineMode) {
-        // Online mode - try to fetch from Firestore
-        DocumentSnapshot doc = await FirebaseFirestore.instance
+        DocumentSnapshot snapshot = await FirebaseFirestore.instance
             .collection('employees')
             .doc(employeeId)
             .get();
 
-        if (doc.exists) {
-          Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+        if (snapshot.exists) {
+          Map<String, dynamic> data = snapshot.data() as Map<String, dynamic>;
 
-          // Save the data locally for offline access
+          // Save the data locally for future offline access
           await _saveUserDataLocally(employeeId, data);
 
-          // If has image, save it separately for better offline access
+          // Also save the face image separately if it exists
           if (data.containsKey('image') && data['image'] != null) {
             await _saveEmployeeImageLocally(employeeId, data['image']);
+            _checkStoredImage(); // Update stored image status
           }
 
           setState(() {
@@ -111,17 +164,6 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
           debugPrint("Fetched and cached employee data from Firestore");
         } else {
           CustomSnackBar.errorSnackBar("Employee data not found");
-        }
-      } else {
-        // Offline mode - try to get data from local storage
-        Map<String, dynamic>? localData = await _getUserDataLocally(employeeId);
-        if (localData != null) {
-          setState(() {
-            employeeData = localData;
-          });
-          debugPrint("Retrieved employee data from local storage");
-        } else {
-          CustomSnackBar.errorSnackBar("No cached employee data available");
         }
       }
     } catch (e) {
@@ -145,8 +187,18 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
       // Store complete user details in SharedPreferences
       final SharedPreferences prefs = await SharedPreferences.getInstance();
 
+      // Create a deep copy of the data that we can modify
+      Map<String, dynamic> dataCopy = Map<String, dynamic>.from(userData);
+
+      // Convert all Timestamp objects to ISO8601 strings
+      dataCopy.forEach((key, value) {
+        if (value is Timestamp) {
+          dataCopy[key] = value.toDate().toIso8601String();
+        }
+      });
+
       // Save the full userData JSON
-      await prefs.setString('user_data_$userId', jsonEncode(userData));
+      await prefs.setString('user_data_$userId', jsonEncode(dataCopy));
 
       // Also save critical fields individually for faster access and recovery
       await prefs.setString('user_name_$userId', userData['name'] ?? 'User');
@@ -208,9 +260,6 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
   }
 
   // Save employee image for offline face auth
-  // Improved method for saving employee image
-  // Replace your current _saveEmployeeImageLocally method with this:
-
   Future<void> _saveEmployeeImageLocally(String employeeId, String imageBase64) async {
     try {
       // Clean the image data before storing
@@ -226,36 +275,14 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('employee_image_$employeeId', cleanedImage);
       debugPrint("Saved employee image (length: ${cleanedImage.length})");
+
+      // Update debug info
+      setState(() {
+        _hasStoredFace = true;
+        _storedImageSize = cleanedImage.length;
+      });
     } catch (e) {
       debugPrint("Error saving employee image: $e");
-    }
-  }
-
-  Future<bool> _testImageRetrieval(String employeeId) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final imageData = prefs.getString('employee_image_$employeeId');
-
-      if (imageData == null || imageData.isEmpty) {
-        debugPrint("No stored image found for testing");
-        return false;
-      }
-
-      debugPrint("Retrieved test image: length ${imageData.length}");
-      debugPrint("Image starts with: ${imageData.substring(0, math.min(50, imageData.length))}");
-
-      // Try decoding to verify format
-      try {
-        final bytes = base64Decode(imageData);
-        debugPrint("Successfully decoded ${bytes.length} bytes");
-        return true;
-      } catch (e) {
-        debugPrint("Failed to decode image: $e");
-        return false;
-      }
-    } catch (e) {
-      debugPrint("Error in test image retrieval: $e");
-      return false;
     }
   }
 
@@ -276,10 +303,37 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
     }
   }
 
+  // New method to verify a face is detected in the camera image
+  // New implementation of _verifyFaceDetected() that doesn't use detectFaces
+  // Simpler approach that uses _faceFeatures from Google ML Kit
+  Future<bool> _verifyFaceDetected() async {
+    if (image2.bitmap == null || image2.bitmap!.isEmpty) {
+      debugPrint("No camera image available for face detection");
+      return false;
+    }
+
+    // Since we already have _faceFeatures from the FaceDetector in Google ML Kit,
+    // we can use it to determine if a face was detected
+    bool hasFace = _faceFeatures != null;
+
+    debugPrint("Face detection result: ${hasFace ? 'Face detected' : 'No face detected'}");
+
+    return hasFace;
+  }
+
   // Replace your existing authentication start code with this
-  void _startAuthentication() {
+  void _startAuthentication() async {
     setState(() => isMatching = true);
     _playScanningAudio;
+
+    // First check if a face is detected in the camera image
+    bool hasFace = await _verifyFaceDetected();
+    if (!hasFace) {
+      _audioPlayer.stop();
+      CustomSnackBar.errorSnackBar("No face detected in camera image. Please try again.");
+      setState(() => isMatching = false);
+      return;
+    }
 
     if (_isOfflineMode) {
       _handleOfflineAuthentication();
@@ -321,6 +375,14 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
             ? "Verify Your Face"
             : "Authenticate Face"),
         elevation: 0,
+        actions: [
+          // Add debug button
+          IconButton(
+            icon: const Icon(Icons.bug_report, color: Colors.white),
+            onPressed: _showDebugConsole,
+            tooltip: 'Debug Console',
+          ),
+        ],
       ),
       body: LayoutBuilder(
         builder: (context, constrains) => Stack(
@@ -456,6 +518,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
 
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (context) {
         return AlertDialog(
           title: const Text("Enter Your PIN"),
@@ -610,6 +673,13 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
             storedImage = storedImage.split(',')[1];
             debugPrint("Cleaned data URL format to pure base64");
           }
+
+          // Update debug info
+          setState(() {
+            _hasStoredFace = true;
+            _storedImageSize = storedImage!.length;
+            _lastThresholdUsed = _isOfflineMode ? "75.0" : "90.0";
+          });
         } else {
           debugPrint("No local image found for ${widget.employeeId}");
         }
@@ -628,15 +698,49 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
 
           debugPrint("Using image from employeeData, length: ${storedImage?.length ?? 'null'}");
           hasImageData = true;
+
+          // Update debug info
+          setState(() {
+            _hasStoredFace = true;
+            _storedImageSize = storedImage!.length;
+            _lastThresholdUsed = _isOfflineMode ? "75.0" : "90.0";
+          });
         }
       }
 
       // If we still don't have image data, show failure
       if (!hasImageData || storedImage == null) {
         debugPrint("No face image found for authentication");
+        setState(() {
+          _lastAuthResult = "Failed - No stored image";
+          isMatching = false;
+        });
+        _playFailedAudio;
         _showFailureDialog(
           title: "Authentication Error",
           description: "No registered face found for this employee. Please ensure face registration is complete or try again when online.",
+        );
+
+        if (widget.onAuthenticationComplete != null) {
+          widget.onAuthenticationComplete!(false);
+        }
+        return;
+      }
+
+      // Verify we can decode the base64 string
+      try {
+        final bytes = base64Decode(storedImage);
+        debugPrint("Successfully decoded base64 image: ${bytes.length} bytes");
+      } catch (e) {
+        debugPrint("Error decoding base64 image: $e");
+        setState(() {
+          _lastAuthResult = "Failed - Invalid base64";
+          isMatching = false;
+        });
+        _playFailedAudio;
+        _showFailureDialog(
+          title: "Authentication Error",
+          description: "Stored face image is corrupted. Please register your face again.",
         );
 
         if (widget.onAuthenticationComplete != null) {
@@ -664,7 +768,10 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
 
       if (response == null || response.results == null || response.results!.isEmpty) {
         debugPrint("No matching results returned from SDK");
-        setState(() => isMatching = false);
+        setState(() {
+          isMatching = false;
+          _lastAuthResult = "Failed - No results from SDK";
+        });
         _playFailedAudio;
         _showFailureDialog(
           title: "Authentication Failed",
@@ -692,16 +799,25 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
         _similarity = split!.matchedFaces.isNotEmpty
             ? (split.matchedFaces[0]!.similarity! * 100).toStringAsFixed(2)
             : "0.0";
+        _lastSimilarityScore = _similarity;
         log("Face similarity score: $_similarity%");
       });
 
       // Check if faces match
       if (_similarity != "0.0" && double.parse(_similarity) > similarityThreshold) {
         debugPrint("Face authentication successful! Similarity: $_similarity%");
+        setState(() {
+          _lastAuthResult = "Success ($_similarity%)";
+        });
         _handleSuccessfulAuthentication();
       } else {
         // Face doesn't match
         debugPrint("Face authentication failed! Similarity: $_similarity%");
+        setState(() {
+          _lastAuthResult = "Failed - Low similarity ($_similarity%)";
+          isMatching = false;
+        });
+        _playFailedAudio;
         _showFailureDialog(
           title: "Authentication Failed",
           description: "Face doesn't match. Please try again.",
@@ -713,7 +829,10 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
       }
     } catch (e) {
       debugPrint("Error during face matching: $e");
-      setState(() => isMatching = false);
+      setState(() {
+        isMatching = false;
+        _lastAuthResult = "Failed - Error: $e";
+      });
       _playFailedAudio;
       _showFailureDialog(
         title: "Authentication Error",
@@ -726,14 +845,29 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
     }
   }
 
-  // Add this method to your AuthenticateFaceView class
-  // Add this method to your AuthenticateFaceView class
   Future<void> _handleOfflineAuthentication() async {
     debugPrint("Starting offline authentication with local face matching");
 
-    // Instead of bypassing face matching, we'll use the stored face data
-    // and proceed with the actual matching even when offline
     try {
+      // Get stored image with detailed logging
+      final prefs = await SharedPreferences.getInstance();
+      final storedImage = prefs.getString('employee_image_${widget.employeeId}');
+
+      if (storedImage == null || storedImage.isEmpty) {
+        debugPrint("No stored face image found for offline authentication");
+        _showFailureDialog(
+          title: "Authentication Failed",
+          description: "No stored face data found for offline authentication.",
+        );
+        if (widget.onAuthenticationComplete != null) {
+          widget.onAuthenticationComplete!(false);
+        }
+        return;
+      }
+
+      debugPrint("Found stored image, length: ${storedImage.length}");
+
+      // Continue with face matching
       await _matchFaceWithStored();
     } catch (e) {
       debugPrint("Error in offline face matching: $e");
@@ -741,7 +875,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
       _playFailedAudio;
       _showFailureDialog(
         title: "Authentication Failed",
-        description: "Error during offline face matching. Please try again or connect to the internet.",
+        description: "Error during offline face matching: $e",
       );
 
       if (widget.onAuthenticationComplete != null) {
@@ -750,7 +884,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
     }
   }
 
-// Helper method for successful authentication
+  // Helper method for successful authentication
   void _handleSuccessfulAuthentication() {
     _audioPlayer
       ..stop()
@@ -838,5 +972,154 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
         );
       },
     );
+  }
+
+  // Add the debug console method here
+  void _showDebugConsole() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text("Face Authentication Debug"),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildDebugSection("Connectivity", [
+                  "Status: ${_isOfflineMode ? 'Offline' : 'Online'}",
+                ]),
+                const SizedBox(height: 10),
+                _buildDebugSection("Local Storage", [
+                  "Employee ID: ${widget.employeeId ?? 'Not provided'}",
+                  "Has Stored Face: $_hasStoredFace",
+                  "Image Size: $_storedImageSize bytes",
+                ]),
+                const SizedBox(height: 10),
+                _buildDebugSection("Last Authentication", [
+                  "Similarity Score: $_lastSimilarityScore%",
+                  "Threshold Used: $_lastThresholdUsed%",
+                  "Result: $_lastAuthResult",
+                ]),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text("Close"),
+            ),
+            ElevatedButton(
+              onPressed: _fixStoredImage,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: accentColor,
+              ),
+              child: const Text("Fix Stored Image"),
+            ),
+            ElevatedButton(
+              onPressed: _resetAuthenticationState,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+              ),
+              child: const Text("Reset Authentication"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildDebugSection(String title, List<String> items) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
+        const SizedBox(height: 5),
+        ...items.map((item) => Padding(
+          padding: const EdgeInsets.only(left: 10, top: 3),
+          child: Text("• $item"),
+        )),
+      ],
+    );
+  }
+
+  Future<void> _fixStoredImage() async {
+    try {
+      if (widget.employeeId == null) {
+        CustomSnackBar.errorSnackBar("No employee ID provided");
+        return;
+      }
+
+      setState(() => _isLoading = true);
+
+      final prefs = await SharedPreferences.getInstance();
+      String? storedImage = prefs.getString('employee_image_${widget.employeeId}');
+
+      if (storedImage == null || storedImage.isEmpty) {
+        setState(() => _isLoading = false);
+        CustomSnackBar.errorSnackBar("No image found to fix");
+        return;
+      }
+
+      // First check if it's in data URL format
+      bool wasFixed = false;
+      String cleanedImage = storedImage;
+
+      if (cleanedImage.contains('data:image') && cleanedImage.contains(',')) {
+        cleanedImage = cleanedImage.split(',')[1];
+        wasFixed = true;
+      }
+
+      // Then verify it's actually valid base64
+      try {
+        base64Decode(cleanedImage);
+      } catch (e) {
+        setState(() => _isLoading = false);
+        CustomSnackBar.errorSnackBar("Image is not valid base64 and cannot be fixed automatically");
+        return;
+      }
+
+      // Save the fixed image
+      await prefs.setString('employee_image_${widget.employeeId}', cleanedImage);
+
+      setState(() {
+        _isLoading = false;
+        _storedImageSize = cleanedImage.length;
+        _hasStoredFace = true;
+      });
+
+      if (wasFixed) {
+        CustomSnackBar.successSnackBar("Image fixed! Try authentication again");
+      } else {
+        CustomSnackBar.successSnackBar("Image was already in correct format");
+      }
+
+      // Close the dialog
+      Navigator.of(context).pop();
+    } catch (e) {
+      setState(() => _isLoading = false);
+      CustomSnackBar.errorSnackBar("Error fixing image: $e");
+    }
+  }
+
+  Future<void> _resetAuthenticationState() async {
+    setState(() {
+      _similarity = "0.0";
+      _lastSimilarityScore = "0.0";
+      _lastAuthResult = "Reset";
+      isMatching = false;
+      _canAuthenticate = false;
+    });
+
+    // Reset camera image
+    image2 = regula.MatchFacesImage();
+
+    CustomSnackBar.successSnackBar("Authentication state reset");
+
+    // Close the dialog
+    Navigator.of(context).pop();
   }
 }
