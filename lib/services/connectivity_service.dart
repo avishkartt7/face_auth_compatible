@@ -1,7 +1,9 @@
-// lib/services/connectivity_service.dart
+// lib/services/connectivity_service.dart - Improved version
 
 import 'dart:async';
+import 'dart:io';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 enum ConnectionStatus {
   online,
@@ -34,7 +36,7 @@ class ConnectivityService {
     Connectivity().onConnectivityChanged.listen((ConnectivityResult result) {
       // Only update if we're not in test override mode
       if (!_testOverrideOffline) {
-        _updateConnectionStatus(result);
+        _performConnectivityCheck(result);
       }
     });
 
@@ -44,18 +46,75 @@ class ConnectivityService {
 
   Future<void> _checkInitialConnection() async {
     final ConnectivityResult result = await Connectivity().checkConnectivity();
-    _updateConnectionStatus(result);
+    _performConnectivityCheck(result);
   }
 
-  void _updateConnectionStatus(ConnectivityResult result) {
-    if (result == ConnectivityResult.none) {
-      _currentStatus = ConnectionStatus.offline;
-    } else {
-      _currentStatus = ConnectionStatus.online;
+  Future<void> _performConnectivityCheck(ConnectivityResult connectivityResult) async {
+    // First, check if device thinks it has connectivity
+    if (connectivityResult == ConnectivityResult.none) {
+      _updateStatus(ConnectionStatus.offline);
+      return;
     }
 
-    // Broadcast the new status
-    _connectionStatusController.add(_currentStatus);
+    // Next, try a more reliable internet check
+    bool hasRealConnection = await _hasActualInternetConnection();
+
+    _updateStatus(hasRealConnection ? ConnectionStatus.online : ConnectionStatus.offline);
+  }
+
+  Future<bool> _hasActualInternetConnection() async {
+    try {
+      // Try to reach a reliable host with a short timeout
+      final result = await InternetAddress.lookup('google.com')
+          .timeout(const Duration(seconds: 3));
+
+      if (result.isNotEmpty && result[0].rawAddress.isNotEmpty) {
+        // Double check with a service we use in the app
+        try {
+          await FirebaseFirestore.instance
+              .collection('test')
+              .doc('test')
+              .get()
+              .timeout(const Duration(seconds: 3));
+          return true;
+        } catch (e) {
+          print("Firebase check failed but internet appears available: $e");
+          // Still return true if we can reach google but not Firebase
+          // This allows the app to work in online mode even if Firebase has issues
+          return true;
+        }
+      }
+      return false;
+    } on SocketException catch (e) {
+      print("Socket exception during connectivity check: $e");
+      return false;
+    } on TimeoutException catch (e) {
+      print("Timeout during connectivity check: $e");
+      return false;
+    } catch (e) {
+      print("Unknown error during connectivity check: $e");
+      return false;
+    }
+  }
+
+  void _updateStatus(ConnectionStatus newStatus) {
+    if (_currentStatus != newStatus) {
+      print("Connectivity status changed from $_currentStatus to $newStatus");
+      _currentStatus = newStatus;
+      // Broadcast the new status
+      _connectionStatusController.add(_currentStatus);
+    }
+  }
+
+  // Force check connectivity - call this when user manually refreshes
+  Future<bool> checkConnectivity() async {
+    if (_testOverrideOffline) {
+      return false;
+    }
+
+    final result = await _hasActualInternetConnection();
+    _updateStatus(result ? ConnectionStatus.online : ConnectionStatus.offline);
+    return result;
   }
 
   // Method to simulate offline mode for testing
