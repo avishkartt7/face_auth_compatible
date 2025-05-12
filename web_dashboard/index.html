@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HR Dashboard - PHOENICIAN</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Login Section -->
+    <div id="loginContainer" class="login-container">
+        <div class="login-box">
+            <h2>HR Dashboard Login</h2>
+            <input type="email" id="email" placeholder="Email">
+            <input type="password" id="password" placeholder="Password">
+            <button onclick="login()">Login</button>
+        </div>
+    </div>
+
+    <!-- Dashboard Section (Hidden by default) -->
+    <div id="dashboardContainer" class="dashboard-container" style="display: none;">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="logo">
+                <h2>PHOENICIAN</h2>
+                <p>HR Dashboard</p>
+            </div>
+            <nav>
+                <a href="#" class="nav-item active" onclick="showSection('attendance', event)">
+                    <span>📊</span> Attendance
+                </a>
+                <a href="#" class="nav-item" onclick="showSection('employees', event)">
+                    <span>👥</span> Employees
+                </a>
+                <a href="#" class="nav-item" onclick="logout()">
+                    <span>🚪</span> Logout
+                </a>
+            </nav>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Attendance Section -->
+            <div id="attendanceSection" class="section">
+                <div class="header">
+                    <h1>Employee Attendance</h1>
+                </div>
+
+                <!-- Date Filter -->
+                <div class="filters">
+                    <input type="date" id="dateFilter" onchange="filterByDate()">
+                    <select id="employeeFilter" onchange="filterByEmployee()">
+                        <option value="">All Employees</option>
+                    </select>
+                </div>
+
+                <!-- Attendance Table -->
+                <div class="attendance-container">
+                    <table id="attendanceTable">
+                        <thead>
+                            <tr>
+                                <th>Employee Name</th>
+                                <th>Date</th>
+                                <th>Check In</th>
+                                <th>Check Out</th>
+                                <th>Total Hours</th>
+                                <th>Status</th>
+                                <th>Location</th>
+                            </tr>
+                        </thead>
+                        <tbody id="attendanceData">
+                            <!-- Data will be populated here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Employee Management Section -->
+            <div id="employeesSection" class="section" style="display: none;">
+                <div class="header">
+                    <h1>Employee Management</h1>
+                    <button class="btn-primary" onclick="showAddEmployeeModal()">Add Employee</button>
+                </div>
+
+                <!-- Excel Upload Section -->
+                <div class="upload-section">
+                    <h3>Import</h3>
+                    <p>Upload Excel file with employee data</p>
+                    <input type="file" id="excelFile" accept=".xlsx,.xls" onchange="handleExcelUpload(event)">
+                    <button class="btn-secondary" onclick="downloadTemplate()">Download Template</button>
+                </div>
+
+                <!-- Employee List -->
+                <div class="employee-list-container">
+                    <table id="employeeTable">
+                        <thead>
+                            <tr>
+                                <th>PIN</th>
+                                <th>Name</th>
+                                <th>Designation</th>
+                                <th>Department</th>
+                                <th>Email</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="employeeData">
+                            <!-- Data will be populated here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Employee Modal -->
+    <div id="addEmployeeModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Add New Employee</h2>
+                <span class="close" onclick="closeModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="employeeForm">
+                    <div class="form-group">
+                        <label>PIN (4 digits)*</label>
+                        <div style="display: flex; gap: 5px;">
+                            <input type="text" id="empPin" maxlength="4" pattern="\d{4}" required style="flex: 1;">
+                            <button type="button" class="btn-small" onclick="document.getElementById('empPin').value = generateRandomPIN()">Generate</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Full Name*</label>
+                        <input type="text" id="empName" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Designation*</label>
+                        <input type="text" id="empDesignation" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Department*</label>
+                        <input type="text" id="empDepartment" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Email</label>
+                        <input type="email" id="empEmail">
+                    </div>
+                    <div class="form-group">
+                        <label>Phone</label>
+                        <input type="tel" id="empPhone">
+                    </div>
+                    <div class="form-group">
+                        <label>Country</label>
+                        <input type="text" id="empCountry">
+                    </div>
+                    <div class="form-group">
+                        <label>Birthdate</label>
+                        <input type="date" id="empBirthdate">
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
+                        <button type="submit" class="btn-primary">Add Employee</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase Scripts -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore-compat.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
+    <script src="firebase-config.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
