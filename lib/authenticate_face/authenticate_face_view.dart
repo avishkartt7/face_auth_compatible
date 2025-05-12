@@ -1354,6 +1354,9 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
       _debugStatus = "Authentication state reset";
     });
 
+
+
+
     // Reset camera image
     image2 = regula.MatchFacesImage();
 

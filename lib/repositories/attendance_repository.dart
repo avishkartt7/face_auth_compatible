@@ -1,4 +1,4 @@
-// lib/repositories/attendance_repository.dart
+// lib/repositories/attendance_repository.dart - Fixed version
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:face_auth_compatible/model/local_attendance_model.dart';
@@ -33,6 +33,7 @@ class AttendanceRepository {
     try {
       // Format today's date as YYYY-MM-DD for the document ID
       String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      print("AttendanceRepository: Recording check-in for $employeeId on $today");
 
       // Prepare data for both online and offline storage
       Map<String, dynamic> checkInData = {
@@ -59,30 +60,41 @@ class AttendanceRepository {
 
       // If online, try to save to Firestore first
       if (_connectivityService.currentStatus == ConnectionStatus.online) {
-        await _firestore
-            .collection('employees')
-            .doc(employeeId)
-            .collection('attendance')
-            .doc(today)
-            .set(checkInData, SetOptions(merge: true));
+        try {
+          await _firestore
+              .collection('employees')
+              .doc(employeeId)
+              .collection('attendance')
+              .doc(today)
+              .set({
+            ...checkInData,
+            'checkIn': Timestamp.fromDate(checkInTime),
+          }, SetOptions(merge: true));
 
-        // Mark as synced in local storage
-        localRecord = LocalAttendanceRecord(
-          employeeId: employeeId,
-          date: today,
-          checkIn: checkInTime.toIso8601String(),
-          locationId: locationId,
-          isSynced: true,
-          rawData: checkInData,
-        );
+          // Mark as synced in local storage
+          localRecord = LocalAttendanceRecord(
+            employeeId: employeeId,
+            date: today,
+            checkIn: checkInTime.toIso8601String(),
+            locationId: locationId,
+            isSynced: true,
+            rawData: checkInData,
+          );
+
+          print("AttendanceRepository: Check-in saved to Firestore");
+        } catch (e) {
+          print("AttendanceRepository: Error saving to Firestore: $e");
+          // Continue with local save even if Firestore fails
+        }
       }
 
       // Always save to local database regardless of online status
       await _dbHelper.insert('attendance', localRecord.toMap());
+      print("AttendanceRepository: Check-in saved locally");
 
       return true;
     } catch (e) {
-      print('Error recording check-in: $e');
+      print('AttendanceRepository: Error recording check-in: $e');
       return false;
     }
   }
@@ -95,6 +107,7 @@ class AttendanceRepository {
     try {
       // Format today's date
       String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      print("AttendanceRepository: Recording check-out for $employeeId on $today");
 
       // First, check if we have a local record
       List<Map<String, dynamic>> localRecords = await _dbHelper.query(
@@ -104,21 +117,33 @@ class AttendanceRepository {
       );
 
       if (localRecords.isEmpty) {
+        print("AttendanceRepository: No check-in record found for today");
         return false; // No check-in record found
       }
 
       // Get the local record and update it
       LocalAttendanceRecord record = LocalAttendanceRecord.fromMap(localRecords.first);
+
+      // Ensure there's a check-in time
+      if (record.checkIn == null) {
+        print("AttendanceRepository: No check-in time in record");
+        return false;
+      }
+
       DateTime checkInTime = DateTime.parse(record.checkIn!);
 
       // Calculate working hours
       double hoursWorked = checkOutTime.difference(checkInTime).inMinutes / 60;
+      print("AttendanceRepository: Hours worked: ${hoursWorked.toStringAsFixed(2)}");
 
       // Update the raw data
       Map<String, dynamic> updatedData = Map<String, dynamic>.from(record.rawData);
       updatedData['checkOut'] = checkOutTime.toIso8601String();
       updatedData['workStatus'] = 'Completed';
       updatedData['totalHours'] = hoursWorked;
+
+      // Determine sync status based on connectivity
+      bool shouldSync = _connectivityService.currentStatus == ConnectionStatus.online;
 
       // Prepare the updated local record
       LocalAttendanceRecord updatedRecord = LocalAttendanceRecord(
@@ -128,35 +153,53 @@ class AttendanceRepository {
         checkIn: record.checkIn,
         checkOut: checkOutTime.toIso8601String(),
         locationId: record.locationId,
-        isSynced: _connectivityService.currentStatus == ConnectionStatus.online,
+        isSynced: false, // Always mark as unsynced initially
         rawData: updatedData,
       );
 
-      // If online, update Firestore
-      if (_connectivityService.currentStatus == ConnectionStatus.online) {
-        await _firestore
-            .collection('employees')
-            .doc(employeeId)
-            .collection('attendance')
-            .doc(today)
-            .update({
-          'checkOut': checkOutTime.toIso8601String(),
-          'workStatus': 'Completed',
-          'totalHours': hoursWorked,
-        });
-      }
-
-      // Update local record
+      // Update local record first
       await _dbHelper.update(
         'attendance',
         updatedRecord.toMap(),
         where: 'id = ?',
         whereArgs: [record.id],
       );
+      print("AttendanceRepository: Local record updated");
+
+      // If online, try to update Firestore
+      if (shouldSync) {
+        try {
+          await _firestore
+              .collection('employees')
+              .doc(employeeId)
+              .collection('attendance')
+              .doc(today)
+              .set({
+            'checkOut': Timestamp.fromDate(checkOutTime),
+            'workStatus': 'Completed',
+            'totalHours': hoursWorked,
+          }, SetOptions(merge: true));
+
+          print("AttendanceRepository: Firestore updated successfully");
+
+          // Mark as synced in local database
+          await _dbHelper.update(
+            'attendance',
+            {'is_synced': 1},
+            where: 'id = ?',
+            whereArgs: [record.id],
+          );
+        } catch (e) {
+          print("AttendanceRepository: Error updating Firestore: $e");
+          // Continue - local update was successful
+        }
+      } else {
+        print("AttendanceRepository: Offline mode - record marked for sync");
+      }
 
       return true;
     } catch (e) {
-      print('Error recording check-out: $e');
+      print('AttendanceRepository: Error recording check-out: $e');
       return false;
     }
   }
@@ -316,21 +359,44 @@ class AttendanceRepository {
   // Sync pending records with Firestore
   Future<bool> syncPendingRecords() async {
     if (_connectivityService.currentStatus == ConnectionStatus.offline) {
-      return false; // Can't sync while offline
+      print("AttendanceRepository: Cannot sync while offline");
+      return false;
     }
 
     try {
       // Get all pending records
       List<LocalAttendanceRecord> pendingRecords = await getPendingRecords();
+      print("AttendanceRepository: Syncing ${pendingRecords.length} pending records");
+
+      int successCount = 0;
+      int failureCount = 0;
 
       for (var record in pendingRecords) {
         try {
+          print("AttendanceRepository: Syncing record ${record.id} for date ${record.date}");
+
+          // Prepare Firestore data
+          Map<String, dynamic> firestoreData = Map<String, dynamic>.from(record.rawData);
+
+          // Convert ISO string dates to Timestamps for Firestore
+          if (firestoreData['checkIn'] != null) {
+            firestoreData['checkIn'] = Timestamp.fromDate(
+                DateTime.parse(firestoreData['checkIn'])
+            );
+          }
+          if (firestoreData['checkOut'] != null) {
+            firestoreData['checkOut'] = Timestamp.fromDate(
+                DateTime.parse(firestoreData['checkOut'])
+            );
+          }
+
+          // Update Firestore
           await _firestore
               .collection('employees')
               .doc(record.employeeId)
               .collection('attendance')
               .doc(record.date)
-              .set(record.rawData, SetOptions(merge: true));
+              .set(firestoreData, SetOptions(merge: true));
 
           // Mark as synced
           await _dbHelper.update(
@@ -339,7 +405,11 @@ class AttendanceRepository {
             where: 'id = ?',
             whereArgs: [record.id],
           );
+
+          successCount++;
+          print("AttendanceRepository: Successfully synced record ${record.id}");
         } catch (e) {
+          failureCount++;
           // Update with sync error
           await _dbHelper.update(
             'attendance',
@@ -347,13 +417,14 @@ class AttendanceRepository {
             where: 'id = ?',
             whereArgs: [record.id],
           );
-          print('Error syncing record ${record.id}: $e');
+          print('AttendanceRepository: Error syncing record ${record.id}: $e');
         }
       }
 
-      return true;
+      print("AttendanceRepository: Sync completed. Success: $successCount, Failures: $failureCount");
+      return failureCount == 0;
     } catch (e) {
-      print('Error syncing records: $e');
+      print('AttendanceRepository: Error in syncPendingRecords: $e');
       return false;
     }
   }

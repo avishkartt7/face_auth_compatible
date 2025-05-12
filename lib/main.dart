@@ -1,4 +1,4 @@
-// lib/main.dart
+// lib/main.dart - Updated version with proper sync initialization
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -26,6 +26,11 @@ void main() async {
 
   // Setup service locator
   setupServiceLocator();
+
+  // Initialize sync service after service locator is setup
+  final syncService = getIt<SyncService>();
+  // The sync service will initialize itself in the constructor
+  print("Main: Sync service initialized");
 
   runApp(const MyApp());
 }
@@ -317,7 +322,7 @@ class SplashScreen extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Text(
-                "PHOENICIAN",
+                "PHOENICIAN TECHNICAL SERVICES",
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 32,

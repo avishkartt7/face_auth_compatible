@@ -30,8 +30,9 @@ void setupServiceLocator() {
   );
 
   // SyncService needs repos to be registered first
-  getIt.registerSingleton<SyncService>(
-    SyncService(
+  // Use lazy singleton to ensure it's created after all dependencies
+  getIt.registerLazySingleton<SyncService>(
+        () => SyncService(
       connectivityService: getIt<ConnectivityService>(),
       attendanceRepository: getIt<AttendanceRepository>(),
     ),
