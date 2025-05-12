@@ -1,4 +1,4 @@
-// lib/authenticate_face/authenticate_face_view.dart - Improved version
+// lib/authenticate_face/authenticate_face_view.dart - Complete Fixed Version
 
 import 'dart:convert';
 import 'dart:developer';
@@ -79,6 +79,10 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
   @override
   void initState() {
     super.initState();
+
+    // Reset all authentication state when the widget is created
+    _resetAuthenticationState();
+
     _connectivityService = getIt<ConnectivityService>();
 
     // Check connectivity and subscription for changes
@@ -102,6 +106,19 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
     if (widget.employeeId != null) {
       _fetchEmployeeData(widget.employeeId!);
     }
+  }
+
+  void _resetAuthenticationState() {
+    _hasAuthenticated = false;
+    _similarity = "0.0";
+    _lastSimilarityScore = "0.0";
+    _lastAuthResult = "Not attempted";
+    _faceFeatures = null;
+    isMatching = false;
+    _canAuthenticate = false;
+    image1 = regula.MatchFacesImage();
+    image2 = regula.MatchFacesImage();
+    _debugStatus = "Waiting for face capture";
   }
 
   Future<void> _checkStoredImage() async {
@@ -340,20 +357,32 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
 
   // Authentication initiation
   void _startAuthentication() async {
-    // Reset authentication status at the start of a new authentication attempt
+    // Reset authentication status at the start of EACH new authentication attempt
     setState(() {
       isMatching = true;
       _hasAuthenticated = false; // Reset authentication status
       _debugStatus = "Starting authentication...";
+      // Don't reset _faceFeatures here - keep the last detected face
     });
 
     _playScanningAudio;
 
-    // First check if a face is detected in the camera image
+    // Wait a bit for face detection to complete if needed
+    if (_faceFeatures == null) {
+      debugPrint("Waiting for face detection...");
+      // Give it up to 2 seconds for face detection
+      int attempts = 0;
+      while (_faceFeatures == null && attempts < 20) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        attempts++;
+      }
+    }
+
+    // Now check if a face is detected
     bool hasFace = await _verifyFaceDetected();
     if (!hasFace) {
       _audioPlayer.stop();
-      CustomSnackBar.errorSnackBar("No face detected in camera image. Please try again.");
+      CustomSnackBar.errorSnackBar("No face detected in camera image. Please position your face in the camera and try again.");
       setState(() {
         isMatching = false;
         _debugStatus = "Authentication failed: No face detected";
@@ -526,8 +555,13 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
                                 },
                                 onInputImage: (inputImage) async {
                                   setState(() => isMatching = true);
-                                  _faceFeatures = await extractFaceFeatures(
-                                      inputImage, _faceDetector);
+                                  try {
+                                    // Extract face features
+                                    _faceFeatures = await extractFaceFeatures(inputImage, _faceDetector);
+                                    debugPrint("Face features extracted: ${_faceFeatures != null ? 'Yes' : 'No'}");
+                                  } catch (e) {
+                                    debugPrint("Error extracting face features: $e");
+                                  }
                                   setState(() => isMatching = false);
                                 },
                               ),
@@ -564,10 +598,14 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
   }
 
   Future<void> _setImage(Uint8List imageToAuthenticate) async {
-    // Reset authentication state whenever a new image is captured
+    // Reset only authentication state, not face features
     setState(() {
       _hasAuthenticated = false;
       _lastAuthResult = "New image captured";
+      _similarity = "0.0";
+      _lastSimilarityScore = "0.0";
+      _lastThresholdUsed = "0.0";
+      // Don't reset _faceFeatures here
     });
 
     image2.bitmap = base64Encode(imageToAuthenticate);
@@ -716,322 +754,198 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
     }
   }
 
+  Future<void> _matchFaceWithStored() async {
+    // Reset authentication state for each new matching attempt
+    setState(() {
+      _hasAuthenticated = false;
+      _debugStatus = "Starting face matching process...";
+    });
 
+    debugPrint("Starting face matching process...");
+    debugPrint("Offline mode: $_isOfflineMode");
 
-    Future<void> _matchFaceWithStored() async {
-      // Reset authentication state for each new matching attempt
-      setState(() {
-        _hasAuthenticated = false;
-        _debugStatus = "Starting face matching process...";
-      });
+    // Variables to store authentication data
+    String? storedImage;
+    bool hasImageData = false;
 
-      debugPrint("Starting face matching process...");
-      debugPrint("Offline mode: $_isOfflineMode");
+    try {
+      // First try to get stored image from local storage
+      if (widget.employeeId != null) {
+        final prefs = await SharedPreferences.getInstance();
+        storedImage = prefs.getString('employee_image_${widget.employeeId}');
 
-      // Variables to store authentication data
-      String? storedImage;
-      bool hasImageData = false;
+        if (storedImage != null && storedImage.isNotEmpty) {
+          debugPrint("Found locally stored image for ${widget.employeeId}, length: ${storedImage.length}");
+          hasImageData = true;
 
-      try {
-        // First try to get stored image from local storage
-        if (widget.employeeId != null) {
-          final prefs = await SharedPreferences.getInstance();
-          storedImage = prefs.getString('employee_image_${widget.employeeId}');
-
-          if (storedImage != null && storedImage.isNotEmpty) {
-            debugPrint("Found locally stored image for ${widget.employeeId}, length: ${storedImage.length}");
-            hasImageData = true;
-
-            // Clean the image format if needed
-            if (storedImage.contains('data:image') && storedImage.contains(',')) {
-              storedImage = storedImage.split(',')[1];
-              debugPrint("Cleaned data URL format to pure base64");
-            }
-
-            // Update debug info
-            setState(() {
-              _hasStoredFace = true;
-              _storedImageSize = storedImage!.length;
-              _lastThresholdUsed = _isOfflineMode ? "75.0" : "90.0";
-            });
-          } else {
-            debugPrint("No local image found for ${widget.employeeId}");
+          // Clean the image format if needed
+          if (storedImage.contains('data:image') && storedImage.contains(',')) {
+            storedImage = storedImage.split(',')[1];
+            debugPrint("Cleaned data URL format to pure base64");
           }
-        }
 
-        // If still no image data, try to get from employeeData as fallback
-        if (!hasImageData && employeeData != null) {
-          if (employeeData!.containsKey('image') && employeeData!['image'] != null) {
-            storedImage = employeeData!['image'];
-
-            // Clean the image format if needed
-            if (storedImage!.contains('data:image') && storedImage!.contains(',')) {
-              storedImage = storedImage!.split(',')[1];
-              debugPrint("Cleaned data URL format from employeeData");
-            }
-
-            debugPrint("Using image from employeeData, length: ${storedImage?.length ?? 'null'}");
-            hasImageData = true;
-
-            // Update debug info
-            setState(() {
-              _hasStoredFace = true;
-              _storedImageSize = storedImage!.length;
-              _lastThresholdUsed = _isOfflineMode ? "75.0" : "90.0";
-            });
-          }
-        }
-
-        // If we still don't have image data, show failure
-        if (!hasImageData || storedImage == null) {
-          debugPrint("No face image found for authentication");
+          // Update debug info
           setState(() {
-            _lastAuthResult = "Failed - No stored image";
-            isMatching = false;
+            _hasStoredFace = true;
+            _storedImageSize = storedImage!.length;
+            _lastThresholdUsed = _isOfflineMode ? "75.0" : "90.0";
           });
-          _playFailedAudio;
-          _showFailureDialog(
-            title: "Authentication Error",
-            description: "No registered face found for this employee. Please ensure face registration is complete or try again when online.",
-          );
-
-          if (widget.onAuthenticationComplete != null) {
-            widget.onAuthenticationComplete!(false);
-          }
-          return;
-        }
-
-        // Verify we can decode the base64 string
-        try {
-          final bytes = base64Decode(storedImage);
-          debugPrint("Successfully decoded base64 image: ${bytes.length} bytes");
-        } catch (e) {
-          debugPrint("Error decoding base64 image: $e");
-          setState(() {
-            _lastAuthResult = "Failed - Invalid base64";
-            isMatching = false;
-          });
-          _playFailedAudio;
-          _showFailureDialog(
-            title: "Authentication Error",
-            description: "Stored face image is corrupted. Please register your face again.",
-          );
-
-          if (widget.onAuthenticationComplete != null) {
-            widget.onAuthenticationComplete!(false);
-          }
-          return;
-        }
-
-        // Based on connectivity mode, choose authentication method
-        if (!_isOfflineMode) {
-          // ONLINE MODE: Use Regula SDK
-          debugPrint("Using Regula SDK for online authentication");
-
-          // Set up Regula face comparison
-          image1.bitmap = storedImage;
-          image1.imageType = regula.ImageType.PRINTED;
-
-          debugPrint("Starting face comparison with Regula SDK");
-          debugPrint("Image1 (stored image) length: ${storedImage.length}");
-          debugPrint("Image2 (camera image) bitmap length: ${image2.bitmap?.length ?? 'null'}");
-
-          var request = regula.MatchFacesRequest();
-          request.images = [image1, image2];
-
-          // Make sure we're still in online mode (could have changed during processing)
-          if (_isOfflineMode) {
-            debugPrint("Switched to offline mode during processing, changing to ML Kit");
-            _handleOfflineAuthentication();
-            return;
-          }
-
-          // IMPORTANT: Ensure the Regula SDK processes correctly locally
-          dynamic value;
-          try {
-            value = await regula.FaceSDK.matchFaces(jsonEncode(request))
-              .timeout(const Duration(seconds: 5)); // Add timeout
-            debugPrint("Face SDK returned value");
-          } catch (e) {
-            debugPrint("Error with Regula SDK, possible timeout: $e");
-            _handleOfflineAuthentication(); // Fall back to offline mode
-            return;
-          }
-
-          var response = regula.MatchFacesResponse.fromJson(json.decode(value));
-
-          if (response == null || response.results == null || response.results!.isEmpty) {
-            debugPrint("No matching results returned from SDK");
-            setState(() {
-              isMatching = false;
-              _lastAuthResult = "Failed - No results from SDK";
-            });
-            _playFailedAudio;
-            _showFailureDialog(
-              title: "Authentication Failed",
-              description: "Unable to process face comparison. Please try again with better lighting.",
-            );
-
-            if (widget.onAuthenticationComplete != null) {
-              widget.onAuthenticationComplete!(false);
-            }
-            return;
-          }
-
-          // Use appropriate threshold value
-          double thresholdValue = 0.75;  // Consistent threshold value
-
-          dynamic str = await regula.FaceSDK.matchFacesSimilarityThresholdSplit(
-              jsonEncode(response.results), thresholdValue);
-
-          var split = regula.MatchFacesSimilarityThresholdSplit.fromJson(json.decode(str));
-
-          // Fixed threshold at 90% for online mode
-          double similarityThreshold = 90.0;
-
-          setState(() {
-            _similarity = split!.matchedFaces.isNotEmpty
-                ? (split.matchedFaces[0]!.similarity! * 100).toStringAsFixed(2)
-                : "0.0";
-            _lastSimilarityScore = _similarity;
-            _lastThresholdUsed = similarityThreshold.toString();
-            debugPrint("Face similarity score: $_similarity%");
-          });
-
-          // Check if faces match
-          if (_similarity != "0.0" && double.parse(_similarity) > similarityThreshold) {
-            debugPrint("Face authentication successful! Similarity: $_similarity%");
-            setState(() {
-              _lastAuthResult = "Success ($_similarity%)";
-              _hasAuthenticated = true;  // Mark as authenticated
-            });
-            _handleSuccessfulAuthentication();
-          } else {
-            // Face doesn't match
-            debugPrint("Face authentication failed! Similarity: $_similarity%");
-            setState(() {
-              _lastAuthResult = "Failed - Low similarity ($_similarity%)";
-              isMatching = false;
-              _hasAuthenticated = false;  // Ensure not authenticated
-            });
-            _playFailedAudio;
-            _showFailureDialog(
-              title: "Authentication Failed",
-              description: "Face doesn't match. Please try again.",
-            );
-
-            if (widget.onAuthenticationComplete != null) {
-              widget.onAuthenticationComplete!(false);
-            }
-          }
         } else {
-          // OFFLINE MODE: Use ML Kit
-          debugPrint("Using ML Kit for offline authentication");
-          _handleOfflineAuthentication();
+          debugPrint("No local image found for ${widget.employeeId}");
         }
-      } catch (e) {
-        debugPrint("Error during face matching: $e");
+      }
+
+      // If still no image data, try to get from employeeData as fallback
+      if (!hasImageData && employeeData != null) {
+        if (employeeData!.containsKey('image') && employeeData!['image'] != null) {
+          storedImage = employeeData!['image'];
+
+          // Clean the image format if needed
+          if (storedImage!.contains('data:image') && storedImage!.contains(',')) {
+            storedImage = storedImage!.split(',')[1];
+            debugPrint("Cleaned data URL format from employeeData");
+          }
+
+          debugPrint("Using image from employeeData, length: ${storedImage?.length ?? 'null'}");
+          hasImageData = true;
+
+          // Update debug info
+          setState(() {
+            _hasStoredFace = true;
+            _storedImageSize = storedImage!.length;
+            _lastThresholdUsed = _isOfflineMode ? "75.0" : "90.0";
+          });
+        }
+      }
+
+      // If we still don't have image data, show failure
+      if (!hasImageData || storedImage == null) {
+        debugPrint("No face image found for authentication");
         setState(() {
+          _lastAuthResult = "Failed - No stored image";
           isMatching = false;
-          _lastAuthResult = "Failed - Error: $e";
-          _hasAuthenticated = false;
         });
         _playFailedAudio;
         _showFailureDialog(
           title: "Authentication Error",
-          description: "Error during face matching: $e",
+          description: "No registered face found for this employee. Please ensure face registration is complete or try again when online.",
         );
 
         if (widget.onAuthenticationComplete != null) {
           widget.onAuthenticationComplete!(false);
         }
+        return;
       }
-    }
 
-    Future<void> _handleOfflineAuthentication() async {
-      debugPrint("Starting offline authentication with ML Kit");
-
+      // Verify we can decode the base64 string
       try {
-        // First check if we have a face detected
-        if (_faceFeatures == null) {
-          debugPrint("No face features detected for offline authentication");
-          setState(() => isMatching = false);
+        final bytes = base64Decode(storedImage);
+        debugPrint("Successfully decoded base64 image: ${bytes.length} bytes");
+      } catch (e) {
+        debugPrint("Error decoding base64 image: $e");
+        setState(() {
+          _lastAuthResult = "Failed - Invalid base64";
+          isMatching = false;
+        });
+        _playFailedAudio;
+        _showFailureDialog(
+          title: "Authentication Error",
+          description: "Stored face image is corrupted. Please register your face again.",
+        );
+
+        if (widget.onAuthenticationComplete != null) {
+          widget.onAuthenticationComplete!(false);
+        }
+        return;
+      }
+
+      // Based on connectivity mode, choose authentication method
+      if (!_isOfflineMode) {
+        // ONLINE MODE: Use Regula SDK
+        debugPrint("Using Regula SDK for online authentication");
+
+        // Set up Regula face comparison
+        image1.bitmap = storedImage;
+        image1.imageType = regula.ImageType.PRINTED;
+
+        debugPrint("Starting face comparison with Regula SDK");
+        debugPrint("Image1 (stored image) length: ${storedImage.length}");
+        debugPrint("Image2 (camera image) bitmap length: ${image2.bitmap?.length ?? 'null'}");
+
+        var request = regula.MatchFacesRequest();
+
+        request.images = [image1, image2];
+
+        // Make sure we're still in online mode (could have changed during processing)
+        if (_isOfflineMode) {
+          debugPrint("Switched to offline mode during processing, changing to ML Kit");
+          _handleOfflineAuthentication();
+          return;
+        }
+
+        // IMPORTANT: Ensure the Regula SDK processes correctly locally
+        dynamic value;
+        try {
+          value = await regula.FaceSDK.matchFaces(jsonEncode(request))
+              .timeout(const Duration(seconds: 5)); // Add timeout
+          debugPrint("Face SDK returned value");
+        } catch (e) {
+          debugPrint("Error with Regula SDK, possible timeout: $e");
+          _handleOfflineAuthentication(); // Fall back to offline mode
+          return;
+        }
+
+        var response = regula.MatchFacesResponse.fromJson(json.decode(value));
+
+        if (response == null || response.results == null || response.results!.isEmpty) {
+          debugPrint("No matching results returned from SDK");
+          setState(() {
+            isMatching = false;
+            _lastAuthResult = "Failed - No results from SDK";
+          });
           _playFailedAudio;
           _showFailureDialog(
             title: "Authentication Failed",
-            description: "No face detected. Please try again with better lighting.",
+            description: "Unable to process face comparison. Please try again with better lighting.",
           );
+
           if (widget.onAuthenticationComplete != null) {
             widget.onAuthenticationComplete!(false);
           }
           return;
         }
 
-        // Get stored face features or image
-        final prefs = await SharedPreferences.getInstance();
-        String? storedFeaturesJson = prefs.getString('employee_face_features_${widget.employeeId}');
+        // Use appropriate threshold value
+        double thresholdValue = 0.75;  // Consistent threshold value
 
-        if (storedFeaturesJson == null || storedFeaturesJson.isEmpty) {
-          debugPrint("No stored face features, falling back to image comparison");
-          // Fall back to image comparison if no stored features
-          if (!_isOfflineMode) {
-            await _matchFaceWithStored(); // Only call if we're not already in this method
-            return;
-          } else {
-            // We're already in offline mode, so show an error
-            setState(() => isMatching = false);
-            _playFailedAudio;
-            _showFailureDialog(
-              title: "Authentication Failed",
-              description: "No face reference data found for offline authentication.",
-            );
-            if (widget.onAuthenticationComplete != null) {
-              widget.onAuthenticationComplete!(false);
-            }
-            return;
-          }
-        }
+        dynamic str = await regula.FaceSDK.matchFacesSimilarityThresholdSplit(
+            jsonEncode(response.results), thresholdValue);
 
-        // Parse stored features
-        Map<String, dynamic> storedFeaturesMap = json.decode(storedFeaturesJson);
-        FaceFeatures storedFeatures = FaceFeatures.fromJson(storedFeaturesMap);
+        var split = regula.MatchFacesSimilarityThresholdSplit.fromJson(json.decode(str));
 
-        // Compare key facial features
-        bool hasMatchingLeftEye = _comparePoints(storedFeatures.leftEye, _faceFeatures!.leftEye, 50);
-        bool hasMatchingRightEye = _comparePoints(storedFeatures.rightEye, _faceFeatures!.rightEye, 50);
-        bool hasMatchingNose = _comparePoints(storedFeatures.noseBase, _faceFeatures!.noseBase, 50);
-        bool hasMatchingMouth = _comparePoints(storedFeatures.leftMouth, _faceFeatures!.leftMouth, 50) &&
-            _comparePoints(storedFeatures.rightMouth, _faceFeatures!.rightMouth, 50);
-
-        // Calculate match percentage
-        int matchCount = 0;
-        int totalTests = 4;
-
-        if (hasMatchingLeftEye) matchCount++;
-        if (hasMatchingRightEye) matchCount++;
-        if (hasMatchingNose) matchCount++;
-        if (hasMatchingMouth) matchCount++;
-
-        double matchPercentage = matchCount / totalTests * 100;
+        // Fixed threshold at 90% for online mode
+        double similarityThreshold = 90.0;
 
         setState(() {
-          _similarity = matchPercentage.toStringAsFixed(2);
+          _similarity = split!.matchedFaces.isNotEmpty
+              ? (split.matchedFaces[0]!.similarity! * 100).toStringAsFixed(2)
+              : "0.0";
           _lastSimilarityScore = _similarity;
-          _lastThresholdUsed = "75.0"; // We use 75% match threshold for offline
+          _lastThresholdUsed = similarityThreshold.toString();
+          debugPrint("Face similarity score: $_similarity%");
         });
 
-        debugPrint("Offline face match: $matchPercentage% ($matchCount/$totalTests features matched)");
-
-        // Determine if match is successful
-        if (matchPercentage >= 75.0) { // 75% match threshold
-          debugPrint("Offline authentication successful!");
+        // Check if faces match
+        if (_similarity != "0.0" && double.parse(_similarity) > similarityThreshold) {
+          debugPrint("Face authentication successful! Similarity: $_similarity%");
           setState(() {
             _lastAuthResult = "Success ($_similarity%)";
             _hasAuthenticated = true;  // Mark as authenticated
           });
           _handleSuccessfulAuthentication();
         } else {
-          debugPrint("Offline authentication failed!");
+          // Face doesn't match
+          debugPrint("Face authentication failed! Similarity: $_similarity%");
           setState(() {
             _lastAuthResult = "Failed - Low similarity ($_similarity%)";
             isMatching = false;
@@ -1047,282 +961,405 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
             widget.onAuthenticationComplete!(false);
           }
         }
-      } catch (e) {
-        debugPrint("Error in offline face matching: $e");
+      } else {
+        // OFFLINE MODE: Use ML Kit
+        debugPrint("Using ML Kit for offline authentication");
+        _handleOfflineAuthentication();
+      }
+    } catch (e) {
+      debugPrint("Error during face matching: $e");
+      setState(() {
+        isMatching = false;
+        _lastAuthResult = "Failed - Error: $e";
+        _hasAuthenticated = false;
+      });
+      _playFailedAudio;
+      _showFailureDialog(
+        title: "Authentication Error",
+        description: "Error during face matching: $e",
+      );
+
+      if (widget.onAuthenticationComplete != null) {
+        widget.onAuthenticationComplete!(false);
+      }
+    }
+  }
+
+  Future<void> _handleOfflineAuthentication() async {
+    debugPrint("Starting offline authentication with ML Kit");
+
+    try {
+      // Force fresh face detection for current image
+      if (_faceFeatures == null) {
+        debugPrint("No face features detected for offline authentication");
         setState(() => isMatching = false);
         _playFailedAudio;
         _showFailureDialog(
           title: "Authentication Failed",
-          description: "Error during face matching: $e",
+          description: "No face detected. Please try again with better lighting.",
+        );
+        if (widget.onAuthenticationComplete != null) {
+          widget.onAuthenticationComplete!(false);
+        }
+        return;
+      }
+
+      // Get stored face features or image
+      final prefs = await SharedPreferences.getInstance();
+      String? storedFeaturesJson = prefs.getString('employee_face_features_${widget.employeeId}');
+
+      if (storedFeaturesJson == null || storedFeaturesJson.isEmpty) {
+        debugPrint("No stored face features, falling back to image comparison");
+        // Fall back to image comparison if no stored features
+        if (!_isOfflineMode) {
+          await _matchFaceWithStored(); // Only call if we're not already in this method
+          return;
+        } else {
+          // We're already in offline mode, so show an error
+          setState(() => isMatching = false);
+          _playFailedAudio;
+          _showFailureDialog(
+            title: "Authentication Failed",
+            description: "No face reference data found for offline authentication.",
+          );
+          if (widget.onAuthenticationComplete != null) {
+            widget.onAuthenticationComplete!(false);
+          }
+          return;
+        }
+      }
+
+      // Parse stored features
+      Map<String, dynamic> storedFeaturesMap = json.decode(storedFeaturesJson);
+      FaceFeatures storedFeatures = FaceFeatures.fromJson(storedFeaturesMap);
+
+      // Compare key facial features
+      bool hasMatchingLeftEye = _comparePoints(storedFeatures.leftEye, _faceFeatures!.leftEye, 50);
+      bool hasMatchingRightEye = _comparePoints(storedFeatures.rightEye, _faceFeatures!.rightEye, 50);
+      bool hasMatchingNose = _comparePoints(storedFeatures.noseBase, _faceFeatures!.noseBase, 50);
+      bool hasMatchingMouth = _comparePoints(storedFeatures.leftMouth, _faceFeatures!.leftMouth, 50) &&
+          _comparePoints(storedFeatures.rightMouth, _faceFeatures!.rightMouth, 50);
+
+      // Calculate match percentage
+      int matchCount = 0;
+      int totalTests = 4;
+
+      if (hasMatchingLeftEye) matchCount++;
+      if (hasMatchingRightEye) matchCount++;
+      if (hasMatchingNose) matchCount++;
+      if (hasMatchingMouth) matchCount++;
+
+      double matchPercentage = matchCount / totalTests * 100;
+
+      setState(() {
+        _similarity = matchPercentage.toStringAsFixed(2);
+        _lastSimilarityScore = _similarity;
+        _lastThresholdUsed = "75.0"; // We use 75% match threshold for offline
+      });
+
+      debugPrint("Offline face match: $matchPercentage% ($matchCount/$totalTests features matched)");
+
+      // Determine if match is successful
+      if (matchPercentage >= 75.0) { // 75% match threshold
+        debugPrint("Offline authentication successful!");
+        setState(() {
+          _lastAuthResult = "Success ($_similarity%)";
+          _hasAuthenticated = true;  // Mark as authenticated
+        });
+        _handleSuccessfulAuthentication();
+      } else {
+        debugPrint("Offline authentication failed!");
+        setState(() {
+          _lastAuthResult = "Failed - Low similarity ($_similarity%)";
+          isMatching = false;
+          _hasAuthenticated = false;  // Ensure not authenticated
+        });
+        _playFailedAudio;
+        _showFailureDialog(
+          title: "Authentication Failed",
+          description: "Face doesn't match. Please try again.",
         );
 
         if (widget.onAuthenticationComplete != null) {
           widget.onAuthenticationComplete!(false);
         }
       }
-    }
-
-    // Helper method to compare two facial points with tolerance
-    bool _comparePoints(Points? p1, Points? p2, double tolerance) {
-      if (p1 == null || p2 == null || p1.x == null || p2.x == null) return false;
-
-      double distance = sqrt(
-          (p1.x! - p2.x!) * (p1.x! - p2.x!) +
-              (p1.y! - p2.y!) * (p1.y! - p2.y!)
+    } catch (e) {
+      debugPrint("Error in offline face matching: $e");
+      setState(() => isMatching = false);
+      _playFailedAudio;
+      _showFailureDialog(
+        title: "Authentication Failed",
+        description: "Error during face matching: $e",
       );
 
-      return distance <= tolerance;
-    }
-
-    // Helper method for successful authentication
-    void _handleSuccessfulAuthentication() {
-      _audioPlayer
-        ..stop()
-        ..setReleaseMode(ReleaseMode.release)
-        ..play(AssetSource("success.mp3"));
-
-      setState(() {
-        trialNumber = 1;
-        isMatching = false;
-        _hasAuthenticated = true;  // Mark as authenticated
-      });
-
-      // Face authentication successful
-      if (widget.isRegistrationValidation) {
-        // If this is part of the registration flow, move to password setup
-        if (mounted) {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => UserPasswordSetupView(
-                employeeId: widget.employeeId!,
-                employeePin: widget.employeePin!,
-              ),
-            ),
-          );
-        }
-      } else {
-        // If this is a regular authentication (like for check-in)
-        _showSuccessDialog();
-
-        // Call the callback if provided (for check-in process)
-        if (widget.onAuthenticationComplete != null) {
-          widget.onAuthenticationComplete!(true);
-        }
+      if (widget.onAuthenticationComplete != null) {
+        widget.onAuthenticationComplete!(false);
       }
     }
+  }
 
-    void _showSuccessDialog() {
-      _audioPlayer.stop();
-      setState(() => isMatching = false);
+  // Helper method to compare two facial points with tolerance
+  bool _comparePoints(Points? p1, Points? p2, double tolerance) {
+    if (p1 == null || p2 == null || p1.x == null || p2.x == null) return false;
 
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text("Authentication Successful"),
-          content: Text("Welcome, ${employeeData?['name'] ?? 'User'}!"),
+    double distance = sqrt(
+        (p1.x! - p2.x!) * (p1.x! - p2.x!) +
+            (p1.y! - p2.y!) * (p1.y! - p2.y!)
+    );
+
+    return distance <= tolerance;
+  }
+
+  // Helper method for successful authentication
+  void _handleSuccessfulAuthentication() {
+    _audioPlayer
+      ..stop()
+      ..setReleaseMode(ReleaseMode.release)
+      ..play(AssetSource("success.mp3"));
+
+    setState(() {
+      trialNumber = 1;
+      isMatching = false;
+      _hasAuthenticated = true;  // Mark as authenticated
+    });
+
+    // Face authentication successful
+    if (widget.isRegistrationValidation) {
+      // If this is part of the registration flow, move to password setup
+      if (mounted) {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => UserPasswordSetupView(
+              employeeId: widget.employeeId!,
+              employeePin: widget.employeePin!,
+            ),
+          ),
+        );
+      }
+    } else {
+      // If this is a regular authentication (like for check-in)
+      _showSuccessDialog();
+
+      // Call the callback if provided (for check-in process)
+      if (widget.onAuthenticationComplete != null) {
+        widget.onAuthenticationComplete!(true);
+      }
+    }
+  }
+
+  void _showSuccessDialog() {
+    _audioPlayer.stop();
+    setState(() => isMatching = false);
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Authentication Successful"),
+        content: Text("Welcome, ${employeeData?['name'] ?? 'User'}!"),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              // The dashboard will handle navigation
+            },
+            child: const Text(
+              "Continue",
+              style: TextStyle(color: accentColor),
+            ),
+          )
+        ],
+      ),
+    );
+  }
+
+  void _showFailureDialog({
+    required String title,
+    required String description,
+  }) {
+    _playFailedAudio;
+    setState(() => isMatching = false);
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(title),
+          content: Text(description),
           actions: [
             TextButton(
               onPressed: () {
                 Navigator.of(context).pop();
-                // The dashboard will handle navigation
               },
               child: const Text(
-                "Continue",
+                "Ok",
                 style: TextStyle(color: accentColor),
               ),
             )
           ],
-        ),
-      );
-    }
+        );
+      },
+    );
+  }
 
-    void _showFailureDialog({
-      required String title,
-      required String description,
-    }) {
-      _playFailedAudio;
-      setState(() => isMatching = false);
-
-      showDialog(
-        context: context,
-        builder: (context) {
-          return AlertDialog(
-            title: Text(title),
-            content: Text(description),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                },
-                child: const Text(
-                  "Ok",
-                  style: TextStyle(color: accentColor),
-                ),
-              )
-            ],
-          );
-        },
-      );
-    }
-
-    // Add the debug console method here
-    void _showDebugConsole() {
-      showDialog(
-        context: context,
-        builder: (context) {
-          return AlertDialog(
-            title: const Text("Face Authentication Debug"),
-            content: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _buildDebugSection("Connectivity", [
-                    "Status: ${_isOfflineMode ? 'Offline' : 'Online'}",
-                    "Status Checked: ${_offlineModeChecked ? 'Yes' : 'No'}",
-                    "Has Authenticated: ${_hasAuthenticated ? 'Yes' : 'No'}",
-                    "Current Status: $_debugStatus",
-                  ]),
-                  const SizedBox(height: 10),
-                  _buildDebugSection("Local Storage", [
-                    "Employee ID: ${widget.employeeId ?? 'Not provided'}",
-                    "Has Stored Face: $_hasStoredFace",
-                    "Image Size: $_storedImageSize bytes",
-                  ]),
-                  const SizedBox(height: 10),
-                  _buildDebugSection("Last Authentication", [
-                    "Similarity Score: $_lastSimilarityScore%",
-                    "Threshold Used: $_lastThresholdUsed%",
-                    "Result: $_lastAuthResult",
-                  ]),
-                ],
-              ),
+  // Add the debug console method here
+  void _showDebugConsole() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text("Face Authentication Debug"),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildDebugSection("Connectivity", [
+                  "Status: ${_isOfflineMode ? 'Offline' : 'Online'}",
+                  "Status Checked: ${_offlineModeChecked ? 'Yes' : 'No'}",
+                  "Has Authenticated: ${_hasAuthenticated ? 'Yes' : 'No'}",
+                  "Current Status: $_debugStatus",
+                ]),
+                const SizedBox(height: 10),
+                _buildDebugSection("Local Storage", [
+                  "Employee ID: ${widget.employeeId ?? 'Not provided'}",
+                  "Has Stored Face: $_hasStoredFace",
+                  "Image Size: $_storedImageSize bytes",
+                ]),
+                const SizedBox(height: 10),
+                _buildDebugSection("Last Authentication", [
+                  "Similarity Score: $_lastSimilarityScore%",
+                  "Threshold Used: $_lastThresholdUsed%",
+                  "Result: $_lastAuthResult",
+                ]),
+              ],
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text("Close"),
-              ),
-              ElevatedButton(
-                onPressed: _fixStoredImage,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: accentColor,
-                ),
-                child: const Text("Fix Stored Image"),
-              ),
-              ElevatedButton(
-                onPressed: _resetAuthenticationState,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.orange,
-                ),
-                child: const Text("Reset Authentication"),
-              ),
-              ElevatedButton(
-                onPressed: _checkConnectivity,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue,
-                ),
-                child: const Text("Check Connectivity"),
-              ),
-            ],
-          );
-        },
-      );
-    }
-
-    Widget _buildDebugSection(String title, List<String> items) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
           ),
-          const SizedBox(height: 5),
-          ...items.map((item) => Padding(
-            padding: const EdgeInsets.only(left: 10, top: 3),
-            child: Text("• $item"),
-          )),
-        ],
-      );
-    }
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text("Close"),
+            ),
+            ElevatedButton(
+              onPressed: _fixStoredImage,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: accentColor,
+              ),
+              child: const Text("Fix Stored Image"),
+            ),
+            ElevatedButton(
+              onPressed: _resetAuthenticationFromDebug,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+              ),
+              child: const Text("Reset Authentication"),
+            ),
+            ElevatedButton(
+              onPressed: _checkConnectivity,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+              ),
+              child: const Text("Check Connectivity"),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
-    Future<void> _fixStoredImage() async {
+  Widget _buildDebugSection(String title, List<String> items) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+        ),
+        const SizedBox(height: 5),
+        ...items.map((item) => Padding(
+          padding: const EdgeInsets.only(left: 10, top: 3),
+          child: Text("• $item"),
+        )),
+      ],
+    );
+  }
+
+  Future<void> _fixStoredImage() async {
+    try {
+      if (widget.employeeId == null) {
+        CustomSnackBar.errorSnackBar("No employee ID provided");
+        return;
+      }
+
+      setState(() => _isLoading = true);
+
+      final prefs = await SharedPreferences.getInstance();
+      String? storedImage = prefs.getString('employee_image_${widget.employeeId}');
+
+      if (storedImage == null || storedImage.isEmpty) {
+        setState(() => _isLoading = false);
+        CustomSnackBar.errorSnackBar("No image found to fix");
+        return;
+      }
+
+      // First check if it's in data URL format
+      bool wasFixed = false;
+      String cleanedImage = storedImage;
+
+      if (cleanedImage.contains('data:image') && cleanedImage.contains(',')) {
+        cleanedImage = cleanedImage.split(',')[1];
+        wasFixed = true;
+      }
+
+      // Then verify it's actually valid base64
       try {
-        if (widget.employeeId == null) {
-          CustomSnackBar.errorSnackBar("No employee ID provided");
-          return;
-        }
-
-        setState(() => _isLoading = true);
-
-        final prefs = await SharedPreferences.getInstance();
-        String? storedImage = prefs.getString('employee_image_${widget.employeeId}');
-
-        if (storedImage == null || storedImage.isEmpty) {
-          setState(() => _isLoading = false);
-          CustomSnackBar.errorSnackBar("No image found to fix");
-          return;
-        }
-
-        // First check if it's in data URL format
-        bool wasFixed = false;
-        String cleanedImage = storedImage;
-
-        if (cleanedImage.contains('data:image') && cleanedImage.contains(',')) {
-          cleanedImage = cleanedImage.split(',')[1];
-          wasFixed = true;
-        }
-
-        // Then verify it's actually valid base64
-        try {
-          base64Decode(cleanedImage);
-        } catch (e) {
-          setState(() => _isLoading = false);
-          CustomSnackBar.errorSnackBar("Image is not valid base64 and cannot be fixed automatically");
-          return;
-        }
-
-        // Save the fixed image
-        await prefs.setString('employee_image_${widget.employeeId}', cleanedImage);
-
-        setState(() {
-          _isLoading = false;
-          _storedImageSize = cleanedImage.length;
-          _hasStoredFace = true;
-        });
-
-        if (wasFixed) {
-          CustomSnackBar.successSnackBar("Image fixed! Try authentication again");
-        } else {
-          CustomSnackBar.successSnackBar("Image was already in correct format");
-        }
-
-        // Close the dialog
-        Navigator.of(context).pop();
+        base64Decode(cleanedImage);
       } catch (e) {
         setState(() => _isLoading = false);
-        CustomSnackBar.errorSnackBar("Error fixing image: $e");
+        CustomSnackBar.errorSnackBar("Image is not valid base64 and cannot be fixed automatically");
+        return;
       }
-    }
 
-    Future<void> _resetAuthenticationState() async {
+      // Save the fixed image
+      await prefs.setString('employee_image_${widget.employeeId}', cleanedImage);
+
       setState(() {
-        _similarity = "0.0";
-        _lastSimilarityScore = "0.0";
-        _lastAuthResult = "Reset";
-        isMatching = false;
-        _canAuthenticate = false;
-        _hasAuthenticated = false;  // Reset authenticated status
-        _debugStatus = "Authentication state reset";
+        _isLoading = false;
+        _storedImageSize = cleanedImage.length;
+        _hasStoredFace = true;
       });
 
-      // Reset camera image
-      image2 = regula.MatchFacesImage();
-
-      CustomSnackBar.successSnackBar("Authentication state reset");
+      if (wasFixed) {
+        CustomSnackBar.successSnackBar("Image fixed! Try authentication again");
+      } else {
+        CustomSnackBar.successSnackBar("Image was already in correct format");
+      }
 
       // Close the dialog
       Navigator.of(context).pop();
+    } catch (e) {
+      setState(() => _isLoading = false);
+      CustomSnackBar.errorSnackBar("Error fixing image: $e");
     }
   }
+
+  Future<void> _resetAuthenticationFromDebug() async {
+    setState(() {
+      _similarity = "0.0";
+      _lastSimilarityScore = "0.0";
+      _lastAuthResult = "Reset";
+      isMatching = false;
+      _canAuthenticate = false;
+      _hasAuthenticated = false;  // Reset authenticated status
+      _debugStatus = "Authentication state reset";
+    });
+
+    // Reset camera image
+    image2 = regula.MatchFacesImage();
+
+    CustomSnackBar.successSnackBar("Authentication state reset");
+
+    // Close the dialog
+    Navigator.of(context).pop();
+  }
+}
