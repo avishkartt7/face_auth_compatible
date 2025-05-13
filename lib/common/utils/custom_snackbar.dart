@@ -1,5 +1,3 @@
-// lib/common/utils/custom_snackbar.dart
-
 import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:flutter/material.dart';
 
@@ -66,24 +64,32 @@ class CustomSnackBar {
       return;
     }
 
-    ScaffoldMessenger.of(context!).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Theme.of(context!).colorScheme.error,
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+    try {
+      ScaffoldMessenger.of(context!).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Theme.of(context!).colorScheme.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      print("Error showing snackbar: $e");
+    }
   }
 
   // Show error snackbar using passed context
   static void _showErrorWithContext(BuildContext context, String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Theme.of(context).colorScheme.error,
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Theme.of(context).colorScheme.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      print("Error showing snackbar: $e");
+    }
   }
 
   // Show success snackbar using static context
@@ -93,23 +99,31 @@ class CustomSnackBar {
       return;
     }
 
-    ScaffoldMessenger.of(context!).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: accentColor,
-      ),
-    );
+    try {
+      ScaffoldMessenger.of(context!).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: accentColor,
+        ),
+      );
+    } catch (e) {
+      print("Error showing snackbar: $e");
+    }
   }
 
   // Show success snackbar using passed context
   static void _showSuccessWithContext(BuildContext context, String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: accentColor,
-      ),
-    );
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: accentColor,
+        ),
+      );
+    } catch (e) {
+      print("Error showing snackbar: $e");
+    }
   }
 }

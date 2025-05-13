@@ -15,6 +15,9 @@ import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_face_api/face_api.dart' as regula;
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:face_auth_compatible/services/connectivity_service.dart';
+import 'package:face_auth_compatible/services/service_locator.dart';
 
 class RegisterFaceView extends StatefulWidget {
   final String employeeId;
@@ -41,6 +44,7 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
   FaceFeatures? _faceFeatures;
   bool _isRegistering = false;
   bool _isOfflineMode = false;
+  late ConnectivityService _connectivityService;
 
   // Add debug info variables
   String _debugStatus = "Waiting for face capture";
@@ -49,23 +53,37 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
   @override
   void initState() {
     super.initState();
+    _connectivityService = getIt<ConnectivityService>();
     _checkConnectivity();
+
+    // Listen to connectivity changes
+    _connectivityService.connectionStatusStream.listen((status) {
+      if (mounted) {
+        setState(() {
+          _isOfflineMode = status == ConnectionStatus.offline;
+          _debugStatus = "Connectivity changed: ${status.toString()}";
+        });
+      }
+    });
+
     debugPrint("FACE REG: Initialized RegisterFaceView for employeeId: ${widget.employeeId}");
   }
 
   Future<void> _checkConnectivity() async {
     try {
-      await FirebaseFirestore.instance.collection('test').doc('test').get()
-          .timeout(const Duration(seconds: 5));
+      // Use the service locator's connectivity service
+      bool isOnline = await _connectivityService.checkConnectivity();
+
       setState(() {
-        _isOfflineMode = false;
+        _isOfflineMode = !isOnline;
       });
-      debugPrint("FACE REG: Online mode detected");
+
+      debugPrint("FACE REG: ${_isOfflineMode ? 'Offline' : 'Online'} mode detected");
     } catch (e) {
       setState(() {
-        _isOfflineMode = true;
+        _isOfflineMode = false; // Default to online mode if check fails
       });
-      debugPrint("FACE REG: Offline mode detected: $e");
+      debugPrint("FACE REG: Error checking connectivity: $e");
     }
   }
 
@@ -97,6 +115,11 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
             icon: const Icon(Icons.bug_report),
             onPressed: _showDebugInfo,
           ),
+          // Add connectivity refresh button
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _checkConnectivity,
+          ),
         ],
       ),
       body: Container(
@@ -113,29 +136,37 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
-            if (_isOfflineMode)
-              Container(
-                margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.offline_bolt, color: Colors.orange, size: 20),
-                    SizedBox(width: 8),
-                    Text(
-                      "Offline Mode - Face registration may not sync properly",
-                      style: TextStyle(
-                        color: Colors.orange,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
+            // Status indicator showing online/offline mode
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: _isOfflineMode
+                    ? Colors.orange.withOpacity(0.2)
+                    : Colors.green.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
               ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    _isOfflineMode ? Icons.offline_bolt : Icons.cloud_done,
+                    color: _isOfflineMode ? Colors.orange : Colors.green,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _isOfflineMode
+                        ? "Offline Mode - Registration will be saved locally"
+                        : "Online Mode - Registration will sync to cloud",
+                    style: TextStyle(
+                      color: _isOfflineMode ? Colors.orange : Colors.green,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
             Container(
               height: screenHeight * 0.82,
               width: double.infinity,
@@ -365,45 +396,12 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
         return;
       }
 
-      // Also prepare to save image for Regula SDK (used in online mode)
-      await _prepareRegulaSdkImage(cleanedImage);
-
-      // Proceed with saving to Firestore if online
-      if (!_isOfflineMode) {
-        debugPrint("FACE REG: Saving to Firestore (online mode)");
-
-        try {
-          await FirebaseFirestore.instance
-              .collection('employees')
-              .doc(widget.employeeId)
-              .update({
-            'image': cleanedImage, // Store clean base64
-            'faceFeatures': _faceFeatures!.toJson(),
-            'faceRegistered': true,
-          });
-
-          debugPrint("FACE REG: Successfully saved to Firestore");
-        } catch (e) {
-          debugPrint("FACE REG: Error saving to Firestore: $e");
-
-          // Don't fail entirely on Firestore error, still try to save locally
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text("Warning: Online sync failed: $e"),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-      } else {
-        debugPrint("FACE REG: Skipping Firestore update (offline mode)");
-      }
-
       // Always save locally for offline use
       final prefs = await SharedPreferences.getInstance();
 
       // 1. Save the base64 image for Regula SDK (online mode)
       await prefs.setString('employee_image_${widget.employeeId}', cleanedImage);
-      debugPrint("FACE REG: Saved face image locally (length: ${cleanedImage.length}) in CLEAN base64 format");
+      debugPrint("FACE REG: Saved face image locally (length: ${cleanedImage.length})");
 
       // 2. Save the ML Kit face features for offline authentication
       await prefs.setString('employee_face_features_${widget.employeeId}',
@@ -413,19 +411,42 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
       // 3. Save a face token to indicate registration is complete
       await prefs.setBool('face_registered_${widget.employeeId}', true);
 
-      // Test local storage immediately to verify
-      final storedImage = prefs.getString('employee_image_${widget.employeeId}');
-      if (storedImage != null) {
-        try {
-          final bytes = base64Decode(storedImage);
-          debugPrint("FACE REG: Local storage verification successful: ${bytes.length} bytes");
-        } catch (e) {
-          debugPrint("FACE REG: Local storage verification failed: $e");
+      // Check connectivity again before Firebase update
+      await _checkConnectivity();
 
-          // Try one more time with fixed format
-          await prefs.setString('employee_image_${widget.employeeId}', cleanedImage);
-          debugPrint("FACE REG: Attempted to fix local storage");
+      // Save to Firebase if online
+      if (!_isOfflineMode) {
+        debugPrint("FACE REG: Attempting to save to Firebase (online mode)");
+
+        try {
+          await FirebaseFirestore.instance
+              .collection('employees')
+              .doc(widget.employeeId)
+              .update({
+            'image': cleanedImage, // Store clean base64
+            'faceFeatures': _faceFeatures!.toJson(),
+            'faceRegistered': true, // This is the key field that was missing
+          });
+
+          debugPrint("FACE REG: Successfully saved to Firebase with faceRegistered = true");
+        } catch (e) {
+          debugPrint("FACE REG: Error saving to Firestore: $e");
+
+          // Show warning but don't fail the registration
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text("Warning: Could not sync to cloud. Data saved locally: $e"),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
         }
+      } else {
+        debugPrint("FACE REG: Offline mode - skipping Firebase update");
+
+        // Create a local flag for syncing later
+        await prefs.setBool('pending_face_registration_${widget.employeeId}', true);
       }
 
       setState(() {
@@ -434,13 +455,17 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
       });
 
       // Show success message
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Face registered successfully!"),
-          backgroundColor: accentColor,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_isOfflineMode
+                ? "Face registered successfully (offline mode)"
+                : "Face registered successfully"),
+            backgroundColor: accentColor,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
 
       // Navigate to face authentication for verification
       if (mounted) {
@@ -462,13 +487,15 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
 
       debugPrint("FACE REG: Error registering face: $e");
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Error registering face: $e"),
-          backgroundColor: Colors.red,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Error registering face: $e"),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     }
   }
 

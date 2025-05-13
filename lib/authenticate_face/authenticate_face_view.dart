@@ -421,8 +421,8 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
 
   @override
   Widget build(BuildContext context) {
-    // Make sure the context is set for screen size utilities
-    CustomSnackBar.context = context;
+    // Remove any global context setting - use local context throughout
+    // Don't set CustomSnackBar.context here
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -449,150 +449,160 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
         ],
       ),
       body: LayoutBuilder(
-        builder: (context, constrains) => Stack(
-          children: [
-            Container(
-              width: constrains.maxWidth,
-              height: constrains.maxHeight,
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    scaffoldTopGradientClr,
-                    scaffoldBottomGradientClr,
-                  ],
+        builder: (context, constraints) {
+          // Use the constraints directly instead of relying on global utilities
+          return Stack(
+            children: [
+              Container(
+                width: constraints.maxWidth,
+                height: constraints.maxHeight,
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      scaffoldTopGradientClr,
+                      scaffoldBottomGradientClr,
+                    ],
+                  ),
                 ),
               ),
-            ),
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    if (widget.isRegistrationValidation)
-                      Padding(
-                        padding: EdgeInsets.only(bottom: 0.02.sh),
-                        child: const Text(
-                          "Let's verify your face was registered correctly",
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    if (_isOfflineMode)
-                      Padding(
-                        padding: EdgeInsets.only(bottom: 0.01.sh),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.offline_bolt, color: Colors.orange, size: 20),
-                              SizedBox(width: 8),
-                              Text(
-                                "Offline Mode - Using ML Kit",
-                                style: TextStyle(
-                                  color: Colors.orange,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      if (widget.isRegistrationValidation)
+                        Padding(
+                          padding: EdgeInsets.only(bottom: constraints.maxHeight * 0.02),
+                          child: const Text(
+                            "Let's verify your face was registered correctly",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            textAlign: TextAlign.center,
                           ),
                         ),
-                      ),
-                    if (!_isOfflineMode)
-                      Padding(
-                        padding: EdgeInsets.only(bottom: 0.01.sh),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: Colors.green.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.wifi, color: Colors.green, size: 20),
-                              SizedBox(width: 8),
-                              Text(
-                                "Online Mode - Using Regula SDK",
-                                style: TextStyle(
-                                  color: Colors.green,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    Container(
-                      height: widget.isRegistrationValidation ? 0.75.sh : 0.82.sh,
-                      width: double.infinity,
-                      padding: EdgeInsets.fromLTRB(0.05.sw, 0.025.sh, 0.05.sw, 0),
-                      decoration: BoxDecoration(
-                        color: overlayContainerClr,
-                        borderRadius: BorderRadius.only(
-                          topLeft: Radius.circular(0.03.sh),
-                          topRight: Radius.circular(0.03.sh),
-                        ),
-                      ),
-                      child: Column(
-                        children: [
-                          Stack(
-                            children: [
-                              CameraView(
-                                onImage: (image) {
-                                  _setImage(image);
-                                },
-                                onInputImage: (inputImage) async {
-                                  setState(() => isMatching = true);
-                                  try {
-                                    // Extract face features
-                                    _faceFeatures = await extractFaceFeatures(inputImage, _faceDetector);
-                                    debugPrint("Face features extracted: ${_faceFeatures != null ? 'Yes' : 'No'}");
-                                  } catch (e) {
-                                    debugPrint("Error extracting face features: $e");
-                                  }
-                                  setState(() => isMatching = false);
-                                },
-                              ),
-                              if (isMatching)
-                                Align(
-                                  alignment: Alignment.center,
-                                  child: Padding(
-                                    padding: EdgeInsets.only(top: 0.064.sh),
-                                    child: const AnimatedView(),
+                      if (_isOfflineMode)
+                        Padding(
+                          padding: EdgeInsets.only(bottom: constraints.maxHeight * 0.01),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.offline_bolt, color: Colors.orange, size: 20),
+                                SizedBox(width: 8),
+                                Text(
+                                  "You are in Offline Mode - Using ML Kit",
+                                  style: TextStyle(
+                                    color: Colors.orange,
+                                    fontWeight: FontWeight.bold,
                                   ),
                                 ),
-                            ],
-                          ),
-                          const Spacer(),
-                          if (_canAuthenticate)
-                            CustomButton(
-                              text: widget.isRegistrationValidation
-                                  ? "Verify Face"
-                                  : "Authenticate",
-                              onTap: _startAuthentication,
+                              ],
                             ),
-                          SizedBox(height: 0.038.sh),
-                        ],
+                          ),
+                        ),
+                      if (!_isOfflineMode)
+                        Padding(
+                          padding: EdgeInsets.only(bottom: constraints.maxHeight * 0.01),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.green.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.wifi, color: Colors.green, size: 20),
+                                SizedBox(width: 8),
+                                Text(
+                                  "You are in Online Mode - Using Regula SDK",
+                                  style: TextStyle(
+                                    color: Colors.green,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      Container(
+                        height: widget.isRegistrationValidation
+                            ? constraints.maxHeight * 0.75
+                            : constraints.maxHeight * 0.82,
+                        width: double.infinity,
+                        padding: EdgeInsets.fromLTRB(
+                            constraints.maxWidth * 0.05,
+                            constraints.maxHeight * 0.025,
+                            constraints.maxWidth * 0.05,
+                            0
+                        ),
+                        decoration: BoxDecoration(
+                          color: overlayContainerClr,
+                          borderRadius: BorderRadius.only(
+                            topLeft: Radius.circular(constraints.maxHeight * 0.03),
+                            topRight: Radius.circular(constraints.maxHeight * 0.03),
+                          ),
+                        ),
+                        child: Column(
+                          children: [
+                            Stack(
+                              children: [
+                                CameraView(
+                                  onImage: (image) {
+                                    _setImage(image);
+                                  },
+                                  onInputImage: (inputImage) async {
+                                    setState(() => isMatching = true);
+                                    try {
+                                      // Extract face features
+                                      _faceFeatures = await extractFaceFeatures(inputImage, _faceDetector);
+                                      debugPrint("Face features extracted: ${_faceFeatures != null ? 'Yes' : 'No'}");
+                                    } catch (e) {
+                                      debugPrint("Error extracting face features: $e");
+                                    }
+                                    setState(() => isMatching = false);
+                                  },
+                                ),
+                                if (isMatching)
+                                  Align(
+                                    alignment: Alignment.center,
+                                    child: Padding(
+                                      padding: EdgeInsets.only(top: constraints.maxHeight * 0.064),
+                                      child: const AnimatedView(),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            const Spacer(),
+                            if (_canAuthenticate)
+                              CustomButton(
+                                text: widget.isRegistrationValidation
+                                    ? "Verify Face"
+                                    : "Authenticate",
+                                onTap: _startAuthentication,
+                              ),
+                            SizedBox(height: constraints.maxHeight * 0.038),
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            )
-          ],
-        ),
+              )
+            ],
+          );
+        },
       ),
     );
   }
@@ -794,6 +804,8 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
           debugPrint("No local image found for ${widget.employeeId}");
         }
       }
+
+
 
       // If still no image data, try to get from employeeData as fallback
       if (!hasImageData && employeeData != null) {
@@ -1028,6 +1040,9 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
           return;
         }
       }
+
+
+
 
       // Parse stored features
       Map<String, dynamic> storedFeaturesMap = json.decode(storedFeaturesJson);

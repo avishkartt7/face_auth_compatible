@@ -1,9 +1,6 @@
-// lib/common/views/camera_view.dart
-
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:face_auth_compatible/common/utils/extensions/size_extension.dart';
 import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
@@ -38,6 +35,10 @@ class _CameraViewState extends State<CameraView> {
 
   @override
   Widget build(BuildContext context) {
+    // Get screen dimensions directly from MediaQuery
+    final double screenHeight = MediaQuery.of(context).size.height;
+    final double screenWidth = MediaQuery.of(context).size.width;
+
     return Column(
       children: [
         Row(
@@ -46,17 +47,17 @@ class _CameraViewState extends State<CameraView> {
             Icon(
               Icons.camera_alt_outlined,
               color: primaryWhite,
-              size: 0.038.sh,
+              size: screenHeight * 0.038,
             ),
           ],
         ),
-        SizedBox(height: 0.025.sh),
+        SizedBox(height: screenHeight * 0.025),
         _image != null
             ? Stack(
           alignment: Alignment.bottomRight,
           children: [
             CircleAvatar(
-              radius: 0.15.sh,
+              radius: screenHeight * 0.15,
               backgroundColor: const Color(0xffD9D9D9),
               backgroundImage: FileImage(_image!),
             ),
@@ -79,11 +80,11 @@ class _CameraViewState extends State<CameraView> {
           ],
         )
             : CircleAvatar(
-          radius: 0.15.sh,
+          radius: screenHeight * 0.15,
           backgroundColor: const Color(0xffD9D9D9),
           child: Icon(
             Icons.camera_alt,
-            size: 0.09.sh,
+            size: screenHeight * 0.09,
             color: const Color(0xff2E2E2E),
           ),
         ),

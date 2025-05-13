@@ -94,8 +94,7 @@ class _UserProfileViewState extends State<UserProfileView> {
 
   @override
   Widget build(BuildContext context) {
-    // Initialize context directly here instead of using a global variable
-    // This is much safer and avoids the late initialization error
+    // Remove any global context initialization - we'll use local context directly
 
     return Scaffold(
       extendBodyBehindAppBar: true,
