@@ -1,4 +1,4 @@
-// lib/admin/user_management_admin.dart (create this file)
+// lib/admin/user_management_admin.dart
 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -6,6 +6,7 @@ import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:face_auth_compatible/common/utils/custom_snackbar.dart';
 import 'package:face_auth_compatible/admin/add_edit_employee_view.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+
 class UserManagementAdmin extends StatefulWidget {
   const UserManagementAdmin({Key? key}) : super(key: key);
 
@@ -306,6 +307,26 @@ class _UserManagementAdminState extends State<UserManagementAdmin> {
               _buildDetailRow('Face Registered', data['faceRegistered'] == true ? 'Yes' : 'No'),
               _buildDetailRow('Profile Completed', data['profileCompleted'] == true ? 'Yes' : 'No'),
               _buildDetailRow('Registration Completed', data['registrationCompleted'] == true ? 'Yes' : 'No'),
+
+              // Add break time information
+              const SizedBox(height: 16),
+              const Divider(),
+              const SizedBox(height: 8),
+              const Text(
+                'Break Time Information',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 8),
+              _buildDetailRow('Daily Break',
+                  '${data['breakStartTime'] ?? 'Not set'} - ${data['breakEndTime'] ?? 'Not set'}'),
+              _buildDetailRow('Has Jumma Break',
+                  data['hasJummaBreak'] == true ? 'Yes' : 'No'),
+              if (data['hasJummaBreak'] == true)
+                _buildDetailRow('Jumma Break Time',
+                    '${data['jummaBreakStart'] ?? 'Not set'} - ${data['jummaBreakEnd'] ?? 'Not set'}'),
             ],
           ),
         ),

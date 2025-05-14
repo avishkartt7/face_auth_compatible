@@ -1,4 +1,4 @@
-// lib/admin/add_edit_employee_view.dart (create this file)
+// lib/admin/add_edit_employee_view.dart
 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -6,6 +6,7 @@ import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:face_auth_compatible/common/utils/custom_snackbar.dart';
 import 'dart:math';
 import 'package:firebase_auth/firebase_auth.dart';
+
 class AddEditEmployeeView extends StatefulWidget {
   final String? employeeId;
   final Map<String, dynamic>? employeeData;
@@ -32,9 +33,16 @@ class _AddEditEmployeeViewState extends State<AddEditEmployeeView> {
   final TextEditingController _birthdateController = TextEditingController();
   final TextEditingController _pinController = TextEditingController();
 
+  // New controllers for break times
+  final TextEditingController _breakStartTimeController = TextEditingController();
+  final TextEditingController _breakEndTimeController = TextEditingController();
+  final TextEditingController _jummaBreakStartController = TextEditingController();
+  final TextEditingController _jummaBreakEndController = TextEditingController();
+
   bool _isEditMode = false;
   bool _isLoading = false;
   bool _generateRandomPin = true;
+  bool _hasJummaBreak = false; // For Friday prayer break
 
   @override
   void initState() {
@@ -59,6 +67,13 @@ class _AddEditEmployeeViewState extends State<AddEditEmployeeView> {
     _countryController.text = widget.employeeData!['country'] ?? '';
     _birthdateController.text = widget.employeeData!['birthdate'] ?? '';
     _pinController.text = widget.employeeData!['pin'] ?? '';
+
+    // Load break time data
+    _breakStartTimeController.text = widget.employeeData!['breakStartTime'] ?? '';
+    _breakEndTimeController.text = widget.employeeData!['breakEndTime'] ?? '';
+    _hasJummaBreak = widget.employeeData!['hasJummaBreak'] ?? false;
+    _jummaBreakStartController.text = widget.employeeData!['jummaBreakStart'] ?? '';
+    _jummaBreakEndController.text = widget.employeeData!['jummaBreakEnd'] ?? '';
   }
 
   void _generatePin() {
@@ -78,6 +93,10 @@ class _AddEditEmployeeViewState extends State<AddEditEmployeeView> {
     _countryController.dispose();
     _birthdateController.dispose();
     _pinController.dispose();
+    _breakStartTimeController.dispose();
+    _breakEndTimeController.dispose();
+    _jummaBreakStartController.dispose();
+    _jummaBreakEndController.dispose();
     super.dispose();
   }
 
@@ -110,13 +129,17 @@ class _AddEditEmployeeViewState extends State<AddEditEmployeeView> {
         'country': _countryController.text.trim(),
         'birthdate': _birthdateController.text.trim(),
         'pin': _pinController.text.trim(),
+        'breakStartTime': _breakStartTimeController.text.trim(),
+        'breakEndTime': _breakEndTimeController.text.trim(),
+        'hasJummaBreak': _hasJummaBreak,
+        'jummaBreakStart': _jummaBreakStartController.text.trim(),
+        'jummaBreakEnd': _jummaBreakEndController.text.trim(),
         'lastUpdated': FieldValue.serverTimestamp(),
       };
 
       if (!_isEditMode) {
         // Add defaults for new employees
         employeeData.addAll({
-
           'profileCompleted': false,
           'faceRegistered': false,
           'registrationCompleted': false,
@@ -191,6 +214,29 @@ class _AddEditEmployeeViewState extends State<AddEditEmployeeView> {
     if (picked != null) {
       setState(() {
         _birthdateController.text = "${picked.day}/${picked.month}/${picked.year}";
+      });
+    }
+  }
+
+  Future<void> _selectTime(TextEditingController controller) async {
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: accentColor,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null) {
+      setState(() {
+        controller.text = picked.format(context);
       });
     }
   }
@@ -377,6 +423,155 @@ class _AddEditEmployeeViewState extends State<AddEditEmployeeView> {
                   ),
                 ),
                 onTap: _selectDate,
+              ),
+
+              const SizedBox(height: 24),
+
+              // Break Time Section
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(8),
+                  color: Colors.grey.shade50,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      "Break Time Settings",
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Daily break time
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _breakStartTimeController,
+                            readOnly: true,
+                            decoration: InputDecoration(
+                              labelText: "Daily Break Start Time *",
+                              prefixIcon: const Icon(Icons.access_time),
+                              border: const OutlineInputBorder(),
+                              suffixIcon: IconButton(
+                                icon: const Icon(Icons.access_time),
+                                onPressed: () => _selectTime(_breakStartTimeController),
+                              ),
+                            ),
+                            onTap: () => _selectTime(_breakStartTimeController),
+                            validator: (value) {
+                              if (value == null || value.isEmpty) {
+                                return "Please select break start time";
+                              }
+                              return null;
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: TextFormField(
+                            controller: _breakEndTimeController,
+                            readOnly: true,
+                            decoration: InputDecoration(
+                              labelText: "Daily Break End Time *",
+                              prefixIcon: const Icon(Icons.access_time),
+                              border: const OutlineInputBorder(),
+                              suffixIcon: IconButton(
+                                icon: const Icon(Icons.access_time),
+                                onPressed: () => _selectTime(_breakEndTimeController),
+                              ),
+                            ),
+                            onTap: () => _selectTime(_breakEndTimeController),
+                            validator: (value) {
+                              if (value == null || value.isEmpty) {
+                                return "Please select break end time";
+                              }
+                              return null;
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    // Jumma break toggle
+                    SwitchListTile(
+                      title: const Text("Friday Prayer Break (Jumma)"),
+                      subtitle: const Text("Enable if employee takes Friday prayer break"),
+                      value: _hasJummaBreak,
+                      onChanged: (value) {
+                        setState(() {
+                          _hasJummaBreak = value;
+                          if (!value) {
+                            _jummaBreakStartController.clear();
+                            _jummaBreakEndController.clear();
+                          }
+                        });
+                      },
+                      activeColor: accentColor,
+                    ),
+
+                    // Jumma break time (only visible if enabled)
+                    if (_hasJummaBreak) ...[
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextFormField(
+                              controller: _jummaBreakStartController,
+                              readOnly: true,
+                              decoration: InputDecoration(
+                                labelText: "Jumma Break Start *",
+                                prefixIcon: const Icon(Icons.access_time),
+                                border: const OutlineInputBorder(),
+                                suffixIcon: IconButton(
+                                  icon: const Icon(Icons.access_time),
+                                  onPressed: () => _selectTime(_jummaBreakStartController),
+                                ),
+                              ),
+                              onTap: () => _selectTime(_jummaBreakStartController),
+                              validator: (value) {
+                                if (_hasJummaBreak && (value == null || value.isEmpty)) {
+                                  return "Please select Jumma break start time";
+                                }
+                                return null;
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: TextFormField(
+                              controller: _jummaBreakEndController,
+                              readOnly: true,
+                              decoration: InputDecoration(
+                                labelText: "Jumma Break End *",
+                                prefixIcon: const Icon(Icons.access_time),
+                                border: const OutlineInputBorder(),
+                                suffixIcon: IconButton(
+                                  icon: const Icon(Icons.access_time),
+                                  onPressed: () => _selectTime(_jummaBreakEndController),
+                                ),
+                              ),
+                              onTap: () => _selectTime(_jummaBreakEndController),
+                              validator: (value) {
+                                if (_hasJummaBreak && (value == null || value.isEmpty)) {
+                                  return "Please select Jumma break end time";
+                                }
+                                return null;
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
               ),
 
               const SizedBox(height: 24),

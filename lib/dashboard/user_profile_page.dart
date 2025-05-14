@@ -30,8 +30,15 @@ class _UserProfilePageState extends State<UserProfilePage> {
   late TextEditingController _countryController;
   late TextEditingController _birthdateController;
 
+  // Add break time controllers
+  late TextEditingController _breakStartTimeController;
+  late TextEditingController _breakEndTimeController;
+  late TextEditingController _jummaBreakStartController;
+  late TextEditingController _jummaBreakEndController;
+
   bool _isEditing = false;
   bool _isLoading = false;
+  bool _hasJummaBreak = false;
 
   @override
   void initState() {
@@ -45,6 +52,13 @@ class _UserProfilePageState extends State<UserProfilePage> {
     _emailController = TextEditingController(text: widget.userData['email'] ?? '');
     _countryController = TextEditingController(text: widget.userData['country'] ?? '');
     _birthdateController = TextEditingController(text: widget.userData['birthdate'] ?? '');
+
+    // Initialize break time controllers
+    _breakStartTimeController = TextEditingController(text: widget.userData['breakStartTime'] ?? '');
+    _breakEndTimeController = TextEditingController(text: widget.userData['breakEndTime'] ?? '');
+    _hasJummaBreak = widget.userData['hasJummaBreak'] ?? false;
+    _jummaBreakStartController = TextEditingController(text: widget.userData['jummaBreakStart'] ?? '');
+    _jummaBreakEndController = TextEditingController(text: widget.userData['jummaBreakEnd'] ?? '');
   }
 
   @override
@@ -56,6 +70,10 @@ class _UserProfilePageState extends State<UserProfilePage> {
     _emailController.dispose();
     _countryController.dispose();
     _birthdateController.dispose();
+    _breakStartTimeController.dispose();
+    _breakEndTimeController.dispose();
+    _jummaBreakStartController.dispose();
+    _jummaBreakEndController.dispose();
     super.dispose();
   }
 
@@ -63,6 +81,29 @@ class _UserProfilePageState extends State<UserProfilePage> {
     setState(() {
       _isEditing = !_isEditing;
     });
+  }
+
+  Future<void> _selectTime(TextEditingController controller) async {
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: accentColor,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null) {
+      setState(() {
+        controller.text = picked.format(context);
+      });
+    }
   }
 
   Future<void> _saveProfile() async {
@@ -87,6 +128,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
         'email': _emailController.text.trim(),
         'country': _countryController.text.trim(),
         'birthdate': _birthdateController.text.trim(),
+        'breakStartTime': _breakStartTimeController.text.trim(),
+        'breakEndTime': _breakEndTimeController.text.trim(),
+        'hasJummaBreak': _hasJummaBreak,
+        'jummaBreakStart': _jummaBreakStartController.text.trim(),
+        'jummaBreakEnd': _jummaBreakEndController.text.trim(),
         'lastUpdated': FieldValue.serverTimestamp(),
       });
 
@@ -240,6 +286,70 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     icon: Icons.work,
                     isEditing: _isEditing,
                   ),
+
+                  const SizedBox(height: 32),
+
+                  // Break Time Information section
+                  const Text(
+                    "Break Time Information",
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Daily break time
+                  _buildTimeField(
+                    label: "Daily Break Time",
+                    startController: _breakStartTimeController,
+                    endController: _breakEndTimeController,
+                    icon: Icons.coffee,
+                    isEditing: _isEditing,
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Jumma break section
+                  if (!_isEditing && _hasJummaBreak) ...[
+                    _buildTimeField(
+                      label: "Friday Prayer Break (Jumma)",
+                      startController: _jummaBreakStartController,
+                      endController: _jummaBreakEndController,
+                      icon: Icons.mosque,
+                      isEditing: false,
+                    ),
+                  ],
+
+                  if (_isEditing) ...[
+                    SwitchListTile(
+                      title: const Text("Friday Prayer Break"),
+                      subtitle: const Text("Enable if you take Friday prayer break"),
+                      value: _hasJummaBreak,
+                      onChanged: (value) {
+                        setState(() {
+                          _hasJummaBreak = value;
+                          if (!value) {
+                            _jummaBreakStartController.clear();
+                            _jummaBreakEndController.clear();
+                          }
+                        });
+                      },
+                      activeColor: accentColor,
+                    ),
+
+                    if (_hasJummaBreak) ...[
+                      const SizedBox(height: 16),
+                      _buildTimeField(
+                        label: "Friday Prayer Break Time",
+                        startController: _jummaBreakStartController,
+                        endController: _jummaBreakEndController,
+                        icon: Icons.mosque,
+                        isEditing: true,
+                      ),
+                    ],
+                  ],
 
                   const SizedBox(height: 32),
 
@@ -453,6 +563,115 @@ class _UserProfilePageState extends State<UserProfilePage> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildTimeField({
+    required String label,
+    required TextEditingController startController,
+    required TextEditingController endController,
+    required IconData icon,
+    required bool isEditing,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.black54,
+            fontSize: 14,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Icon(icon, color: Colors.black54, size: 22),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Row(
+                children: [
+                  // Start time
+                  Expanded(
+                    child: isEditing
+                        ? GestureDetector(
+                      onTap: () => _selectTime(startController),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: const BoxDecoration(
+                          border: Border(bottom: BorderSide(color: Colors.grey)),
+                        ),
+                        child: Text(
+                          startController.text.isNotEmpty
+                              ? startController.text
+                              : "Start time",
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: startController.text.isNotEmpty
+                                ? Colors.black87
+                                : Colors.black38,
+                          ),
+                        ),
+                      ),
+                    )
+                        : Text(
+                      startController.text.isNotEmpty
+                          ? startController.text
+                          : "Not set",
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: startController.text.isNotEmpty
+                            ? Colors.black87
+                            : Colors.black38,
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(width: 16),
+                  const Text(" - ", style: TextStyle(fontSize: 16)),
+                  const SizedBox(width: 16),
+
+                  // End time
+                  Expanded(
+                    child: isEditing
+                        ? GestureDetector(
+                      onTap: () => _selectTime(endController),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: const BoxDecoration(
+                          border: Border(bottom: BorderSide(color: Colors.grey)),
+                        ),
+                        child: Text(
+                          endController.text.isNotEmpty
+                              ? endController.text
+                              : "End time",
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: endController.text.isNotEmpty
+                                ? Colors.black87
+                                : Colors.black38,
+                          ),
+                        ),
+                      ),
+                    )
+                        : Text(
+                      endController.text.isNotEmpty
+                          ? endController.text
+                          : "Not set",
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: endController.text.isNotEmpty
+                            ? Colors.black87
+                            : Colors.black38,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
