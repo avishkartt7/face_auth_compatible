@@ -140,7 +140,8 @@ body {
     font-size: 14px;
 }
 
-.attendance-container {
+.attendance-container,
+.employee-list-container {
     margin: 20px;
     background: white;
     border-radius: 8px;
@@ -179,7 +180,43 @@ tr:hover {
     font-weight: 600;
 }
 
-/* Employee Section Styles */
+.status-active {
+    color: #22c55e;
+}
+
+.status-pending {
+    color: #f59e0b;
+}
+
+/* MasterSheet specific styles */
+#mastersheetSection {
+    background-color: #f9f9f9;
+}
+
+#mastersheetSection .header {
+    background: #8D8AD3;
+    color: white;
+}
+
+#mastersheetSection .upload-section {
+    background: #f0f0ff;
+    border: 2px solid #8D8AD3;
+}
+
+#mastersheetSection .employee-list-container {
+    border: 1px solid #8D8AD3;
+}
+
+#mastersheetSection table th {
+    background-color: #e8e8ff;
+    color: #5a5a5a;
+}
+
+#mastersheetSection table tr:hover {
+    background-color: #f5f5ff;
+}
+
+/* Section Styles */
 .section {
     padding: 20px;
 }
@@ -200,6 +237,7 @@ tr:hover {
     margin: 10px 0;
 }
 
+/* Button Styles */
 .btn-primary {
     background-color: #55BD94;
     color: white;
@@ -243,14 +281,6 @@ tr:hover {
 
 .btn-danger:hover {
     background-color: #c82333;
-}
-
-.employee-list-container {
-    margin: 20px;
-    background: white;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-    overflow: auto;
 }
 
 /* Modal Styles */
@@ -330,14 +360,6 @@ tr:hover {
     display: flex;
     justify-content: flex-end;
     margin-top: 20px;
-}
-
-.status-active {
-    color: #22c55e;
-}
-
-.status-pending {
-    color: #f59e0b;
 }
 
 /* Responsive adjustments */

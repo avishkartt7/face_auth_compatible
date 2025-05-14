@@ -32,6 +32,9 @@
                 <a href="#" class="nav-item" onclick="showSection('employees', event)">
                     <span>👥</span> Employees
                 </a>
+                <a href="#" class="nav-item" onclick="showSection('mastersheet', event)">
+                    <span>📋</span> MasterSheet
+                </a>
                 <a href="#" class="nav-item" onclick="logout()">
                     <span>🚪</span> Logout
                 </a>
@@ -105,6 +108,41 @@
                             </tr>
                         </thead>
                         <tbody id="employeeData">
+                            <!-- Data will be populated here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- MasterSheet Section -->
+            <div id="mastersheetSection" class="section" style="display: none;">
+                <div class="header">
+                    <h1>Employee MasterSheet</h1>
+                </div>
+
+                <!-- Excel Upload Section for MasterSheet -->
+                <div class="upload-section">
+                    <h3>Import Employee Data to MasterSheet</h3>
+                    <p>Upload Excel file with employee data (Employee Number, Name, Designation, Salary)</p>
+                    <input type="file" id="mastersheetExcelFile" accept=".xlsx,.xls" onchange="handleMasterSheetExcelUpload(event)">
+                    <button class="btn-secondary" onclick="downloadMasterSheetTemplate()">Download Template</button>
+                </div>
+
+                <!-- MasterSheet Employee List -->
+                <div class="employee-list-container">
+                    <table id="mastersheetTable">
+                        <thead>
+                            <tr>
+                                <th>Employee Number</th>
+                                <th>Employee Name</th>
+                                <th>Designation</th>
+                                <th>Salary</th>
+                                <th>Created By</th>
+                                <th>Created On</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="mastersheetData">
                             <!-- Data will be populated here -->
                         </tbody>
                     </table>

@@ -49,6 +49,7 @@ function showSection(section, event) {
     // Hide all sections
     document.getElementById('attendanceSection').style.display = 'none';
     document.getElementById('employeesSection').style.display = 'none';
+    document.getElementById('mastersheetSection').style.display = 'none';
     
     // Remove active class from all nav items
     document.querySelectorAll('.nav-item').forEach(item => {
@@ -58,7 +59,6 @@ function showSection(section, event) {
     // Show selected section and set active
     if (section === 'attendance') {
         document.getElementById('attendanceSection').style.display = 'block';
-        // Set active class based on whether event exists
         if (event && event.currentTarget) {
             event.currentTarget.classList.add('active');
         } else {
@@ -68,13 +68,20 @@ function showSection(section, event) {
         loadEmployeesForFilter();
     } else if (section === 'employees') {
         document.getElementById('employeesSection').style.display = 'block';
-        // Set active class based on whether event exists
         if (event && event.currentTarget) {
             event.currentTarget.classList.add('active');
         } else {
             document.querySelector('.nav-item:nth-child(2)').classList.add('active');
         }
         loadEmployees();
+    } else if (section === 'mastersheet') {
+        document.getElementById('mastersheetSection').style.display = 'block';
+        if (event && event.currentTarget) {
+            event.currentTarget.classList.add('active');
+        } else {
+            document.querySelector('.nav-item:nth-child(3)').classList.add('active');
+        }
+        loadMasterSheetEmployees();
     }
 }
 
@@ -91,7 +98,6 @@ async function loadAttendanceData() {
             const employeeData = employeeDoc.data();
             const employeeId = employeeDoc.id;
 
-            // Get attendance records for this employee
             const attendanceSnapshot = await db.collection('employees')
                 .doc(employeeId)
                 .collection('attendance')
@@ -108,7 +114,6 @@ async function loadAttendanceData() {
             });
         }
 
-        // Sort by date descending
         allAttendanceData.sort((a, b) => {
             if (b.date && a.date) {
                 return b.date.localeCompare(a.date);
@@ -116,7 +121,6 @@ async function loadAttendanceData() {
             return 0;
         });
 
-        // Display data
         displayAttendanceData(allAttendanceData);
     } catch (error) {
         console.error('Error loading attendance:', error);
@@ -136,45 +140,11 @@ function displayAttendanceData(data) {
     tbody.innerHTML = data.map(record => {
         const checkIn = record.checkIn ? formatTime(record.checkIn) : 'Not checked in';
         const checkOut = record.checkOut ? formatTime(record.checkOut) : 'Not checked out';
-        const totalHours = record.totalHours ? record.totalHours.toFixed(2) : '0';
-        const status = record.workStatus || 'Pending';
-        const statusClass = status === 'Completed' ? 'status-completed' : 'status-progress';
-
-        return `
-            <tr>
-                <td>${record.employeeName}</td>
-                <td>${record.date || ''}</td>
-                <td>${checkIn}</td>
-                <td>${checkOut}</td>
-                <td>${totalHours} hrs</td>
-                <td class="${statusClass}">${status}</td>
-                <td>${record.location || 'Unknown'}</td>
-            </tr>
-        `;
-    }).join('');
-}
-
-// Format timestamp to readable time
-// Update the displayAttendanceData function in script.js
-function displayAttendanceData(data) {
-    const tbody = document.getElementById('attendanceData');
-    
-    if (data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7">No attendance data found</td></tr>';
-        return;
-    }
-
-    tbody.innerHTML = data.map(record => {
-        const checkIn = record.checkIn ? formatTime(record.checkIn) : 'Not checked in';
-        const checkOut = record.checkOut ? formatTime(record.checkOut) : 'Not checked out';
         
-        // Calculate total hours properly
-        let totalHoursFormatted = '0.00';
+        let totalHoursFormatted = '0:00';
         if (record.checkIn && record.checkOut) {
-            const hoursFormatted = calculateTotalHours(record.checkIn, record.checkOut);
-            totalHoursFormatted = hoursFormatted;
+            totalHoursFormatted = calculateTotalHours(record.checkIn, record.checkOut);
         } else if (record.totalHours) {
-            // If totalHours is stored as decimal hours, convert to HH:MM format
             totalHoursFormatted = convertDecimalToTime(record.totalHours);
         }
         
@@ -195,15 +165,13 @@ function displayAttendanceData(data) {
     }).join('');
 }
 
-// Add this new function to calculate total hours in HH:MM format
+// Format time helper functions
 function calculateTotalHours(checkIn, checkOut) {
     let checkInDate, checkOutDate;
     
-    // Handle Firestore Timestamp objects
     if (checkIn && checkIn.toDate) {
         checkInDate = checkIn.toDate();
     } else if (checkIn && checkIn.seconds) {
-        // Handle Firestore Timestamp with seconds property
         checkInDate = new Date(checkIn.seconds * 1000 + (checkIn.nanoseconds || 0) / 1000000);
     } else if (typeof checkIn === 'string') {
         checkInDate = new Date(checkIn);
@@ -214,7 +182,6 @@ function calculateTotalHours(checkIn, checkOut) {
     if (checkOut && checkOut.toDate) {
         checkOutDate = checkOut.toDate();
     } else if (checkOut && checkOut.seconds) {
-        // Handle Firestore Timestamp with seconds property
         checkOutDate = new Date(checkOut.seconds * 1000 + (checkOut.nanoseconds || 0) / 1000000);
     } else if (typeof checkOut === 'string') {
         checkOutDate = new Date(checkOut);
@@ -222,45 +189,30 @@ function calculateTotalHours(checkIn, checkOut) {
         return '0:00';
     }
     
-    // Calculate difference in milliseconds
     const diffMs = checkOutDate - checkInDate;
-    
-    // Convert to total minutes and round properly
     const totalMinutes = Math.round(diffMs / (1000 * 60));
-    
-    // Convert to hours and minutes
     const hours = Math.floor(totalMinutes / 60);
     const minutes = totalMinutes % 60;
     
-    // Format as HH:MM
     return `${hours}:${minutes.toString().padStart(2, '0')}`;
 }
 
-// Convert decimal hours to HH:MM format
 function convertDecimalToTime(decimalHours) {
-    // Convert decimal hours to total minutes
     const totalMinutes = Math.round(decimalHours * 60);
-    
-    // Calculate hours and minutes
     const hours = Math.floor(totalMinutes / 60);
     const minutes = totalMinutes % 60;
-    
-    // Format as HH:MM
     return `${hours}:${minutes.toString().padStart(2, '0')}`;
 }
 
-// Update the formatTime function to handle both timestamps and strings better
 function formatTime(timestamp) {
     let date;
     
     if (timestamp && timestamp.toDate) {
         date = timestamp.toDate();
     } else if (timestamp && typeof timestamp === 'string') {
-        // Handle ISO string format
         if (timestamp.includes('T')) {
             date = new Date(timestamp);
         } else {
-            // Handle the specific format from your data: "2025-05-10T22:14:40.373411"
             date = new Date(timestamp.replace(' ', 'T'));
         }
     } else {
@@ -367,6 +319,346 @@ function generateRandomPIN() {
     return Math.floor(1000 + Math.random() * 9000).toString();
 }
 
+// Delete employee
+async function deleteEmployee(employeeId) {
+    if (confirm('Are you sure you want to delete this employee?')) {
+        try {
+            await db.collection('employees').doc(employeeId).delete();
+            alert('Employee deleted successfully');
+            loadEmployees();
+        } catch (error) {
+            console.error('Error deleting employee:', error);
+            alert('Error deleting employee: ' + error.message);
+        }
+    }
+}
+
+// Filter by date
+function filterByDate() {
+    const selectedDate = document.getElementById('dateFilter').value;
+    loadFilteredData({ date: selectedDate });
+}
+
+// Filter by employee
+function filterByEmployee() {
+    const selectedEmployee = document.getElementById('employeeFilter').value;
+    loadFilteredData({ employeeId: selectedEmployee });
+}
+
+// Load filtered data
+async function loadFilteredData(filters = {}) {
+    const tbody = document.getElementById('attendanceData');
+    tbody.innerHTML = '<tr><td colspan="7">Loading...</td></tr>';
+
+    try {
+        let allAttendanceData = [];
+
+        if (filters.employeeId) {
+            const employeeDoc = await db.collection('employees').doc(filters.employeeId).get();
+            const employeeData = employeeDoc.data();
+
+            let query = db.collection('employees')
+                .doc(filters.employeeId)
+                .collection('attendance');
+
+            if (filters.date) {
+                query = query.where('date', '==', filters.date);
+            }
+
+            const snapshot = await query.orderBy('date', 'desc').get();
+
+            snapshot.docs.forEach(doc => {
+                const data = doc.data();
+                allAttendanceData.push({
+                    employeeName: employeeData.name || 'Unknown',
+                    ...data
+                });
+            });
+        } else if (filters.date) {
+            const employeesSnapshot = await db.collection('employees').get();
+
+            for (const employeeDoc of employeesSnapshot.docs) {
+                const employeeData = employeeDoc.data();
+                const employeeId = employeeDoc.id;
+
+                const attendanceSnapshot = await db.collection('employees')
+                    .doc(employeeId)
+                    .collection('attendance')
+                    .where('date', '==', filters.date)
+                    .get();
+
+                attendanceSnapshot.docs.forEach(doc => {
+                    const data = doc.data();
+                    allAttendanceData.push({
+                        employeeName: employeeData.name || 'Unknown',
+                        ...data
+                    });
+                });
+            }
+        } else {
+            await loadAttendanceData();
+            return;
+        }
+
+        displayAttendanceData(allAttendanceData);
+    } catch (error) {
+        console.error('Error loading filtered data:', error);
+        tbody.innerHTML = '<tr><td colspan="7">Error loading data</td></tr>';
+    }
+}
+
+// Handle Excel upload
+function handleExcelUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        try {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+            const jsonData = XLSX.utils.sheet_to_json(firstSheet);
+
+            let successCount = 0;
+            let errorCount = 0;
+
+            for (const row of jsonData) {
+                try {
+                    const employeeData = {
+                        pin: row.PIN?.toString() || generateRandomPIN(),
+                        name: row.Name || '',
+                        designation: row.Designation || '',
+                        department: row.Department || '',
+                        email: row.Email || '',
+                        phone: row.Phone?.toString() || '',
+                        country: row.Country || '',
+                        birthdate: row.Birthdate || '',
+                        registrationCompleted: false,
+                        profileCompleted: false,
+                        faceRegistered: false,
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                        lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+                    };
+
+                    const pinCheck = await db.collection('employees')
+                        .where('pin', '==', employeeData.pin)
+                        .get();
+
+                    if (pinCheck.empty) {
+                        await db.collection('employees').add(employeeData);
+                        successCount++;
+                    } else {
+                        errorCount++;
+                        console.log(`PIN ${employeeData.pin} already exists`);
+                    }
+                } catch (err) {
+                    errorCount++;
+                    console.error('Error processing row:', err);
+                }
+            }
+
+            alert(`Import completed!\nSuccess: ${successCount}\nErrors: ${errorCount}`);
+            loadEmployees();
+        } catch (error) {
+            console.error('Error reading Excel file:', error);
+            alert('Error reading Excel file: ' + error.message);
+        }
+    };
+
+    reader.readAsArrayBuffer(file);
+}
+
+// Download Excel template
+function downloadTemplate() {
+    const templateData = [
+        {
+            PIN: "1234",
+            Name: "John Doe",
+            Designation: "Software Developer",
+            Department: "IT Department",
+            Email: "john@example.com",
+            Phone: "+971501234567",
+            Country: "UAE",
+            Birthdate: "01/01/1990"
+        }
+    ];
+
+    const ws = XLSX.utils.json_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Employees");
+
+    XLSX.writeFile(wb, "employee_template.xlsx");
+}
+
+// MasterSheet Functions
+async function loadMasterSheetEmployees() {
+    const tbody = document.getElementById('mastersheetData');
+    tbody.innerHTML = '<tr><td colspan="7">Loading...</td></tr>';
+
+    try {
+        const snapshot = await db.collection('MasterSheet')
+            .doc('Employee-Data')
+            .collection('employees')
+            .orderBy('employeeNumber')
+            .get();
+        
+        const employees = [];
+
+        snapshot.docs.forEach(doc => {
+            const data = doc.data();
+            employees.push({
+                id: doc.id,
+                ...data
+            });
+        });
+
+        displayMasterSheetEmployees(employees);
+    } catch (error) {
+        console.error('Error loading MasterSheet employees:', error);
+        tbody.innerHTML = '<tr><td colspan="7">Error loading employees</td></tr>';
+    }
+}
+
+function displayMasterSheetEmployees(employees) {
+    const tbody = document.getElementById('mastersheetData');
+    
+    if (employees.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7">No employees found in MasterSheet</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = employees.map(emp => {
+        const createdOn = emp.createdOn ? formatDate(emp.createdOn) : 'N/A';
+        
+        return `
+            <tr>
+                <td>${emp.employeeNumber || 'N/A'}</td>
+                <td>${emp.employeeName || 'N/A'}</td>
+                <td>${emp.designation || 'N/A'}</td>
+                <td>$${emp.salary ? emp.salary.toFixed(2) : '0.00'}</td>
+                <td>${emp.createdBy || 'N/A'}</td>
+                <td>${createdOn}</td>
+                <td>
+                    <button onclick="deleteMasterSheetEmployee('${emp.id}')" class="btn-small btn-danger">Delete</button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function formatDate(timestamp) {
+    if (timestamp && timestamp.toDate) {
+        return timestamp.toDate().toLocaleDateString();
+    }
+    return timestamp;
+}
+
+// MasterSheet Excel upload handler
+function handleMasterSheetExcelUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        try {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+            const jsonData = XLSX.utils.sheet_to_json(firstSheet);
+
+            let successCount = 0;
+            let errorCount = 0;
+
+            for (const row of jsonData) {
+                try {
+                    const employeeNumber = row['EmployeeNumber']?.toString().padStart(4, '0') || '';
+                    
+                    const employeeData = {
+                        employeeNumber: employeeNumber,
+                        employeeName: row['Employee Name'] || '',
+                        designation: row['Designation'] || '',
+                        salary: parseFloat(row['Salary']) || 0,
+                        createdBy: row['Created by'] || 'Default',
+                        createdOn: firebase.firestore.FieldValue.serverTimestamp()
+                    };
+
+                    const empNumberCheck = await db.collection('MasterSheet')
+                        .doc('Employee-Data')
+                        .collection('employees')
+                        .where('employeeNumber', '==', employeeData.employeeNumber)
+                        .get();
+
+                    if (empNumberCheck.empty) {
+                        const docId = `EMP${employeeData.employeeNumber}`;
+                        await db.collection('MasterSheet')
+                            .doc('Employee-Data')
+                            .collection('employees')
+                            .doc(docId)
+                            .set(employeeData);
+                        successCount++;
+                    } else {
+                        errorCount++;
+                        console.log(`Employee number ${employeeData.employeeNumber} already exists`);
+                    }
+                } catch (err) {
+                    errorCount++;
+                    console.error('Error processing row:', err);
+                }
+            }
+
+            alert(`MasterSheet Import completed!\nSuccess: ${successCount}\nErrors: ${errorCount}`);
+            loadMasterSheetEmployees();
+            
+            event.target.value = '';
+        } catch (error) {
+            console.error('Error reading Excel file:', error);
+            alert('Error reading Excel file: ' + error.message);
+        }
+    };
+
+    reader.readAsArrayBuffer(file);
+}
+
+// Download MasterSheet template
+function downloadMasterSheetTemplate() {
+    const templateData = [
+        {
+            EmployeeNumber: "0001",
+            "Employee Name": "John Doe",
+            Designation: "Manager",
+            Salary: 12000,
+            "Created by": "Default"
+        }
+    ];
+
+    const ws = XLSX.utils.json_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "MasterSheet_Employees");
+
+    XLSX.writeFile(wb, "mastersheet_employee_template.xlsx");
+}
+
+// Delete MasterSheet employee
+// Delete MasterSheet employee
+async function deleteMasterSheetEmployee(employeeId) {
+    if (confirm('Are you sure you want to delete this employee from MasterSheet?')) {
+        try {
+            await db.collection('MasterSheet')
+                .doc('Employee-Data')
+                .collection('employees')
+                .doc(employeeId)
+                .delete();
+            
+            alert('Employee deleted successfully from MasterSheet');
+            loadMasterSheetEmployees();
+        } catch (error) {
+            console.error('Error deleting employee:', error);
+            alert('Error deleting employee: ' + error.message);
+        }
+    }
+}
+
 // Setup form submission listener after DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
     // Handle form submission
@@ -415,183 +707,3 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
-
-// Delete employee
-async function deleteEmployee(employeeId) {
-    if (confirm('Are you sure you want to delete this employee?')) {
-        try {
-            await db.collection('employees').doc(employeeId).delete();
-            alert('Employee deleted successfully');
-            loadEmployees();
-        } catch (error) {
-            console.error('Error deleting employee:', error);
-            alert('Error deleting employee: ' + error.message);
-        }
-    }
-}
-
-// Filter by date
-function filterByDate() {
-    const selectedDate = document.getElementById('dateFilter').value;
-    loadFilteredData({ date: selectedDate });
-}
-
-// Filter by employee
-function filterByEmployee() {
-    const selectedEmployee = document.getElementById('employeeFilter').value;
-    loadFilteredData({ employeeId: selectedEmployee });
-}
-
-// Load filtered data
-async function loadFilteredData(filters = {}) {
-    const tbody = document.getElementById('attendanceData');
-    tbody.innerHTML = '<tr><td colspan="7">Loading...</td></tr>';
-
-    try {
-        let allAttendanceData = [];
-
-        if (filters.employeeId) {
-            // Load data for specific employee
-            const employeeDoc = await db.collection('employees').doc(filters.employeeId).get();
-            const employeeData = employeeDoc.data();
-
-            let query = db.collection('employees')
-                .doc(filters.employeeId)
-                .collection('attendance');
-
-            if (filters.date) {
-                query = query.where('date', '==', filters.date);
-            }
-
-            const snapshot = await query.orderBy('date', 'desc').get();
-
-            snapshot.docs.forEach(doc => {
-                const data = doc.data();
-                allAttendanceData.push({
-                    employeeName: employeeData.name || 'Unknown',
-                    ...data
-                });
-            });
-        } else if (filters.date) {
-            // Load all employees data for specific date
-            const employeesSnapshot = await db.collection('employees').get();
-
-            for (const employeeDoc of employeesSnapshot.docs) {
-                const employeeData = employeeDoc.data();
-                const employeeId = employeeDoc.id;
-
-                const attendanceSnapshot = await db.collection('employees')
-                    .doc(employeeId)
-                    .collection('attendance')
-                    .where('date', '==', filters.date)
-                    .get();
-
-                attendanceSnapshot.docs.forEach(doc => {
-                    const data = doc.data();
-                    allAttendanceData.push({
-                        employeeName: employeeData.name || 'Unknown',
-                        ...data
-                    });
-                });
-            }
-        } else {
-            // Load all data
-            await loadAttendanceData();
-            return;
-        }
-
-        displayAttendanceData(allAttendanceData);
-    } catch (error) {
-        console.error('Error loading filtered data:', error);
-        tbody.innerHTML = '<tr><td colspan="7">Error loading data</td></tr>';
-    }
-}
-
-// Handle Excel upload
-function handleExcelUpload(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-        try {
-            const data = new Uint8Array(e.target.result);
-            const workbook = XLSX.read(data, { type: 'array' });
-            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-            const jsonData = XLSX.utils.sheet_to_json(firstSheet);
-
-            // Process each row
-            let successCount = 0;
-            let errorCount = 0;
-
-            for (const row of jsonData) {
-                try {
-                    const employeeData = {
-                        pin: row.PIN?.toString() || generateRandomPIN(),
-                        name: row.Name || '',
-                        designation: row.Designation || '',
-                        department: row.Department || '',
-                        email: row.Email || '',
-                        phone: row.Phone?.toString() || '',
-                        country: row.Country || '',
-                        birthdate: row.Birthdate || '',
-                        registrationCompleted: false,
-                        profileCompleted: false,
-                        faceRegistered: false,
-                        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-                        lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
-                    };
-
-                    // Check for duplicate PIN
-                    const pinCheck = await db.collection('employees')
-                        .where('pin', '==', employeeData.pin)
-                        .get();
-
-                    if (pinCheck.empty) {
-                        await db.collection('employees').add(employeeData);
-                        successCount++;
-                    } else {
-                        errorCount++;
-                        console.log(`PIN ${employeeData.pin} already exists`);
-                    }
-                } catch (err) {
-                    errorCount++;
-                    console.error('Error processing row:', err);
-                }
-            }
-
-            alert(`Import completed!\nSuccess: ${successCount}\nErrors: ${errorCount}`);
-            loadEmployees();
-        } catch (error) {
-            console.error('Error reading Excel file:', error);
-            alert('Error reading Excel file: ' + error.message);
-        }
-    };
-
-    reader.readAsArrayBuffer(file);
-}
-
-// Download Excel template
-function downloadTemplate() {
-    // Create template data
-    const templateData = [
-        {
-            PIN: "1234",
-            Name: "John Doe",
-            Designation: "Software Developer",
-            Department: "IT Department",
-            Email: "john@example.com",
-            Phone: "+971501234567",
-            Country: "UAE",
-            Birthdate: "01/01/1990"
-        }
-    ];
-
-    // Create workbook
-    const ws = XLSX.utils.json_to_sheet(templateData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Employees");
-
-    // Download file
-    XLSX.writeFile(wb, "employee_template.xlsx");
-}
