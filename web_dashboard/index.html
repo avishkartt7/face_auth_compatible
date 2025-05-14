@@ -128,20 +128,28 @@
                     <button class="btn-secondary" onclick="downloadMasterSheetTemplate()">Download Template</button>
                 </div>
 
+                <div class="upload-section">
+                    <h3>Import Overtime Data</h3>
+                    <p>Upload Excel file with employee overtime data (Employee Number, Employee Name, Overtime)</p>
+                    <input type="file" id="overtimeExcelFile" accept=".xlsx,.xls" onchange="handleOvertimeExcelUpload(event)">
+                    <button class="btn-secondary" onclick="downloadOvertimeTemplate()">Download Overtime Template</button>
+                </div>
+
                 <!-- MasterSheet Employee List -->
                 <div class="employee-list-container">
                     <table id="mastersheetTable">
                         <thead>
-                            <tr>
-                                <th>Employee Number</th>
-                                <th>Employee Name</th>
-                                <th>Designation</th>
-                                <th>Salary</th>
-                                <th>Created By</th>
-                                <th>Created On</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
+    <tr>
+        <th>Employee Number</th>
+        <th>Employee Name</th>
+        <th>Designation</th>
+        <th>Salary</th>
+        <th>Overtime</th> <!-- Add this new column -->
+        <th>Created By</th>
+        <th>Created On</th>
+        <th>Actions</th>
+    </tr>
+</thead>
                         <tbody id="mastersheetData">
                             <!-- Data will be populated here -->
                         </tbody>

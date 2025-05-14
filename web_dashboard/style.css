@@ -408,3 +408,27 @@ tr:hover {
     font-size: 14px;
     margin-top: 5px;
 }
+
+/* Overtime status styling */
+.overtime-yes {
+    background-color: #f0f9ff;
+    font-weight: bold;
+    color: #1e40af;
+}
+
+.overtime-no {
+    color: #6b7280;
+}
+
+/* Batch operation buttons */
+.batch-operations {
+    margin: 20px;
+    padding: 15px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.batch-operations button {
+    margin-right: 10px;
+}

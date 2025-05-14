@@ -707,3 +707,208 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
+
+// Handle Overtime Excel upload
+function handleOvertimeExcelUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        try {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+            const jsonData = XLSX.utils.sheet_to_json(firstSheet);
+
+            let successCount = 0;
+            let errorCount = 0;
+            let notFoundCount = 0;
+
+            for (const row of jsonData) {
+                try {
+                    // Get employee number from the Excel (without 'EMP' prefix)
+                    let employeeNumber = row['Employee Number']?.toString().trim() || '';
+                    
+                    // Remove 'EMP' prefix if it exists in the Excel
+                    if (employeeNumber.toUpperCase().startsWith('EMP')) {
+                        employeeNumber = employeeNumber.substring(3);
+                    }
+                    
+                    // Pad with zeros to ensure 4 digits
+                    employeeNumber = employeeNumber.padStart(4, '0');
+                    
+                    // Create the document ID with 'EMP' prefix for Firestore
+                    const docId = `EMP${employeeNumber}`;
+                    
+                    // Check if the employee exists in MasterSheet
+                    const employeeDoc = await db.collection('MasterSheet')
+                        .doc('Employee-Data')
+                        .collection('employees')
+                        .doc(docId)
+                        .get();
+
+                    if (employeeDoc.exists) {
+                        // Update the existing employee with overtime data
+                        await db.collection('MasterSheet')
+                            .doc('Employee-Data')
+                            .collection('employees')
+                            .doc(docId)
+                            .update({
+                                hasOvertime: true,
+                                overtime: row['Overtime'] || 'Yes',
+                                overtimeUpdatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                            });
+                        
+                        successCount++;
+                        console.log(`Updated overtime for employee: ${docId}`);
+                    } else {
+                        notFoundCount++;
+                        console.log(`Employee not found in MasterSheet: ${docId}`);
+                    }
+                } catch (err) {
+                    errorCount++;
+                    console.error('Error processing overtime row:', err);
+                }
+            }
+
+            alert(`Overtime Import completed!\nSuccess: ${successCount}\nNot Found: ${notFoundCount}\nErrors: ${errorCount}`);
+            loadMasterSheetEmployees();
+            
+            // Clear the file input
+            event.target.value = '';
+        } catch (error) {
+            console.error('Error reading overtime Excel file:', error);
+            alert('Error reading Excel file: ' + error.message);
+        }
+    };
+
+    reader.readAsArrayBuffer(file);
+}
+
+// Download Overtime template
+function downloadOvertimeTemplate() {
+    const templateData = [
+        {
+            "Employee Number": "2931",
+            "Employee Name": "Hamada Moftah Rabiei Kamel",
+            "Overtime": "Yes"
+        },
+        {
+            "Employee Number": "EMP0001",
+            "Employee Name": "John Doe",
+            "Overtime": "Yes"
+        }
+    ];
+
+    const ws = XLSX.utils.json_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Overtime_Data");
+
+    // Set column widths for better readability
+    const wscols = [
+        {wch: 15}, // Employee Number
+        {wch: 30}, // Employee Name
+        {wch: 10}  // Overtime
+    ];
+    ws['!cols'] = wscols;
+
+    XLSX.writeFile(wb, "overtime_template.xlsx");
+}
+
+function displayMasterSheetEmployees(employees) {
+    const tbody = document.getElementById('mastersheetData');
+    
+    if (employees.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8">No employees found in MasterSheet</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = employees.map(emp => {
+        const createdOn = emp.createdOn ? formatDate(emp.createdOn) : 'N/A';
+        const hasOvertime = emp.hasOvertime || false;
+        const overtimeStatus = hasOvertime ? 'Yes' : 'No';
+        const overtimeClass = hasOvertime ? 'status-completed' : '';
+        
+        return `
+            <tr>
+                <td>${emp.employeeNumber || 'N/A'}</td>
+                <td>${emp.employeeName || 'N/A'}</td>
+                <td>${emp.designation || 'N/A'}</td>
+                <td>$${emp.salary ? emp.salary.toFixed(2) : '0.00'}</td>
+                <td class="${overtimeClass}">${overtimeStatus}</td>
+                <td>${emp.createdBy || 'N/A'}</td>
+                <td>${createdOn}</td>
+                <td>
+                    <button onclick="toggleOvertime('${emp.id}')" class="btn-small">Toggle OT</button>
+                    <button onclick="deleteMasterSheetEmployee('${emp.id}')" class="btn-small btn-danger">Delete</button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+// Toggle overtime status for an employee
+async function toggleOvertime(employeeId) {
+    try {
+        const docRef = db.collection('MasterSheet')
+            .doc('Employee-Data')
+            .collection('employees')
+            .doc(employeeId);
+        
+        const doc = await docRef.get();
+        const currentData = doc.data();
+        const currentOvertimeStatus = currentData.hasOvertime || false;
+        
+        await docRef.update({
+            hasOvertime: !currentOvertimeStatus,
+            overtime: !currentOvertimeStatus ? 'Yes' : 'No',
+            overtimeUpdatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        
+        alert(`Overtime status updated for ${currentData.employeeName}`);
+        loadMasterSheetEmployees();
+    } catch (error) {
+        console.error('Error toggling overtime:', error);
+        alert('Error updating overtime status: ' + error.message);
+    }
+}
+
+// Mark all selected employees for overtime
+async function markSelectedForOvertime() {
+    const checkboxes = document.querySelectorAll('.employee-checkbox:checked');
+    if (checkboxes.length === 0) {
+        alert('Please select employees first');
+        return;
+    }
+    
+    if (!confirm(`Mark ${checkboxes.length} employees for overtime?`)) {
+        return;
+    }
+    
+    let successCount = 0;
+    const batch = db.batch();
+    
+    checkboxes.forEach(checkbox => {
+        const employeeId = checkbox.value;
+        const docRef = db.collection('MasterSheet')
+            .doc('Employee-Data')
+            .collection('employees')
+            .doc(employeeId);
+        
+        batch.update(docRef, {
+            hasOvertime: true,
+            overtime: 'Yes',
+            overtimeUpdatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+    });
+    
+    try {
+        await batch.commit();
+        alert(`Successfully marked ${checkboxes.length} employees for overtime`);
+        loadMasterSheetEmployees();
+    } catch (error) {
+        console.error('Error in batch overtime update:', error);
+        alert('Error updating overtime: ' + error.message);
+    }
+}
