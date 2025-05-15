@@ -125,6 +125,47 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     super.dispose();
   }
 
+
+  // Add this method to _DashboardViewState class:
+  Future<void> _testLineManagerStatus() async {
+    debugPrint("=== MANUAL LINE MANAGER TEST ===");
+
+    try {
+      // Get all line manager documents
+      var snapshot = await FirebaseFirestore.instance
+          .collection('line_managers')
+          .get();
+
+      debugPrint("Total line manager documents: ${snapshot.docs.length}");
+
+      for (var doc in snapshot.docs) {
+        debugPrint("\nDocument ID: ${doc.id}");
+        debugPrint("Data: ${doc.data()}");
+
+        Map<String, dynamic> data = doc.data();
+        if (data['managerId'] == 'EMP1270') {
+          debugPrint("*** FOUND! This is the line manager document for EMP1270 ***");
+
+          setState(() {
+            _isLineManager = true;
+            _lineManagerDocumentId = doc.id;
+            _lineManagerData = data;
+          });
+
+          CustomSnackBar.successSnackBar("You are a line manager!");
+          return;
+        }
+      }
+
+      debugPrint("Not found as line manager after checking all documents");
+      CustomSnackBar.errorSnackBar("Line manager document not found");
+
+    } catch (e) {
+      debugPrint("Error in test: $e");
+      CustomSnackBar.errorSnackBar("Error: $e");
+    }
+  }
+
   // Load dark mode preference
   Future<void> _loadDarkModePreference() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
@@ -276,69 +317,48 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       debugPrint("Employee PIN: $employeePin");
       debugPrint("User Data available: ${_userData != null}");
 
-      // Try multiple formats to find the line manager document
+      // Check if this employee is a line manager by looking through all line_managers documents
       bool isLineManager = false;
       Map<String, dynamic>? foundLineManagerData;
+      String? lineManagerDocId;
 
-      // Format 1: Try with direct employee ID
-      debugPrint("Trying format 1: Direct employee ID = ${widget.employeeId}");
-      var lineManagerQuery = await FirebaseFirestore.instance
+      // Get all line manager documents
+      var lineManagersSnapshot = await FirebaseFirestore.instance
           .collection('line_managers')
-          .where('managerId', isEqualTo: widget.employeeId)
-          .limit(1)
           .get();
 
-      if (lineManagerQuery.docs.isNotEmpty) {
-        isLineManager = true;
-        foundLineManagerData = lineManagerQuery.docs.first.data();
-        debugPrint("✓ Found with direct employee ID");
-      }
+      debugPrint("Found ${lineManagersSnapshot.docs.length} line manager documents");
 
-      // Format 2: Try with EMP prefix + employee ID
-      if (!isLineManager && !widget.employeeId.startsWith('EMP')) {
-        String empPrefixedId = 'EMP${widget.employeeId}';
-        debugPrint("Trying format 2: EMP prefixed = $empPrefixedId");
+      for (var doc in lineManagersSnapshot.docs) {
+        Map<String, dynamic> data = doc.data();
+        String managerId = data['managerId'] ?? '';
 
-        lineManagerQuery = await FirebaseFirestore.instance
-            .collection('line_managers')
-            .where('managerId', isEqualTo: empPrefixedId)
-            .limit(1)
-            .get();
+        debugPrint("Checking line manager doc ${doc.id}: managerId = $managerId");
 
-        if (lineManagerQuery.docs.isNotEmpty) {
+        // Check if this employee matches the managerId in various formats
+        if (managerId == widget.employeeId ||
+            managerId == 'EMP${widget.employeeId}' ||
+            managerId == 'EMP$employeePin' ||
+            (employeePin != null && managerId == employeePin)) {
           isLineManager = true;
-          foundLineManagerData = lineManagerQuery.docs.first.data();
-          debugPrint("✓ Found with EMP prefix");
-        }
-      }
-
-      // Format 3: Try with PIN
-      if (!isLineManager && employeePin != null) {
-        String pinBasedId = 'EMP$employeePin';
-        debugPrint("Trying format 3: PIN based = $pinBasedId");
-
-        lineManagerQuery = await FirebaseFirestore.instance
-            .collection('line_managers')
-            .where('managerId', isEqualTo: pinBasedId)
-            .limit(1)
-            .get();
-
-        if (lineManagerQuery.docs.isNotEmpty) {
-          isLineManager = true;
-          foundLineManagerData = lineManagerQuery.docs.first.data();
-          debugPrint("✓ Found with PIN");
+          lineManagerDocId = doc.id;
+          foundLineManagerData = data;
+          debugPrint("✓ Found match! Employee is a line manager");
+          break;
         }
       }
 
       // Store the results
       setState(() {
         _isLineManager = isLineManager;
+        _lineManagerDocumentId = lineManagerDocId;
         _lineManagerData = foundLineManagerData;
       });
 
       debugPrint("=== LINE MANAGER CHECK COMPLETE ===");
       debugPrint("Is Line Manager: $_isLineManager");
       if (_isLineManager && _lineManagerData != null) {
+        debugPrint("Line Manager Document ID: $_lineManagerDocumentId");
         debugPrint("Line Manager Data: $_lineManagerData");
         debugPrint("Manager ID: ${_lineManagerData!['managerId']}");
         debugPrint("Team Members: ${_lineManagerData!['teamMembers']}");

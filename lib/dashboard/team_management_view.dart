@@ -46,97 +46,205 @@ class _TeamManagementViewState extends State<TeamManagementView> with SingleTick
     setState(() => _isLoading = true);
 
     try {
-      debugPrint("TeamManagementView: Starting to load team data for manager: ${widget.managerId}");
+      debugPrint("TeamManagementView: Starting to load team data");
+      debugPrint("Manager ID received: ${widget.managerId}");
+      debugPrint("Manager Data: ${widget.managerData}");
 
-      // Get line manager document
-      String lineManagerId = widget.managerId.startsWith('EMP')
-          ? widget.managerId
-          : 'EMP${widget.managerId}';
+      // Initialize empty list for team members
+      _teamMembers = [];
 
-      final lineManagerQuery = await FirebaseFirestore.instance
-          .collection('line_managers')
-          .where('managerId', isEqualTo: lineManagerId)
-          .limit(1)
-          .get();
+      // Query line_managers collection to find this manager's document
+      QuerySnapshot lineManagerSnapshot;
 
-      debugPrint("Looking for line manager with ID: $lineManagerId");
+      // Try different formats to find the line manager document
+      try {
+        // First try with the exact managerId
+        lineManagerSnapshot = await FirebaseFirestore.instance
+            .collection('line_managers')
+            .where('managerId', isEqualTo: widget.managerId)
+            .limit(1)
+            .get();
 
-      if (lineManagerQuery.docs.isEmpty) {
-        debugPrint("No line manager document found");
+        // If not found, try with EMP prefix
+        if (lineManagerSnapshot.docs.isEmpty && !widget.managerId.startsWith('EMP')) {
+          debugPrint("Trying with EMP prefix: EMP${widget.managerId}");
+          lineManagerSnapshot = await FirebaseFirestore.instance
+              .collection('line_managers')
+              .where('managerId', isEqualTo: 'EMP${widget.managerId}')
+              .limit(1)
+              .get();
+        }
+
+        // If still not found, try without EMP prefix if it has one
+        if (lineManagerSnapshot.docs.isEmpty && widget.managerId.startsWith('EMP')) {
+          String withoutPrefix = widget.managerId.substring(3);
+          debugPrint("Trying without EMP prefix: $withoutPrefix");
+          lineManagerSnapshot = await FirebaseFirestore.instance
+              .collection('line_managers')
+              .where('managerId', isEqualTo: withoutPrefix)
+              .limit(1)
+              .get();
+        }
+      } catch (e) {
+        debugPrint("Error querying line managers: $e");
+        setState(() => _isLoading = false);
+        CustomSnackBar.errorSnackBar("Error finding manager data: $e");
+        return;
+      }
+
+      if (lineManagerSnapshot.docs.isEmpty) {
+        debugPrint("No line manager document found for: ${widget.managerId}");
         setState(() => _isLoading = false);
         CustomSnackBar.errorSnackBar("Line manager data not found");
         return;
       }
 
-      final lineManagerData = lineManagerQuery.docs.first.data();
+      // Get the line manager data
+      final lineManagerDoc = lineManagerSnapshot.docs.first;
+      final lineManagerData = lineManagerDoc.data() as Map<String, dynamic>;
       debugPrint("Found line manager data: $lineManagerData");
 
-      final teamMemberNumbers = List<String>.from(lineManagerData['teamMembers'] ?? []);
-      debugPrint("Team members: $teamMemberNumbers");
+      // Get team member IDs
+      final teamMemberIds = List<String>.from(lineManagerData['teamMembers'] ?? []);
+      debugPrint("Team member IDs: $teamMemberIds");
 
-      // Load team members from the MasterSheet collection instead of employees
-      _teamMembers = [];
-      for (final memberNumber in teamMemberNumbers) {
-        debugPrint("Loading member: $memberNumber");
+      if (teamMemberIds.isEmpty) {
+        debugPrint("No team members found for this manager");
+        setState(() => _isLoading = false);
+        return;
+      }
 
+      // Load employee data for each team member
+      for (String memberId in teamMemberIds) {
         try {
-          // Format the employee ID correctly
-          String formattedEmployeeId = 'EMP${memberNumber.toString().padLeft(4, '0')}';
-          debugPrint("Trying to load employee with ID: $formattedEmployeeId");
+          debugPrint("Loading employee data for member ID: $memberId");
 
-          // IMPORTANT: Get from MasterSheet collection, not employees collection
-          final employeeDoc = await FirebaseFirestore.instance
-              .collection('MasterSheet')
-              .doc('Employee-Data')
-              .collection('employees')
-              .doc(formattedEmployeeId)
-              .get();
+          // Try different formats to find the employee
+          DocumentSnapshot? employeeDoc;
+          Map<String, dynamic>? employeeData;
 
-          if (employeeDoc.exists) {
-            debugPrint("Found employee: ${employeeDoc.id}");
-            _teamMembers.add({
-              'id': employeeDoc.id,
-              'employeeNumber': memberNumber,
-              'data': employeeDoc.data(),
-            });
-          } else {
-            debugPrint("No employee found with ID: $formattedEmployeeId");
+          // Try multiple collections and formats
 
-            // Try without zero padding for larger numbers
-            if (int.parse(memberNumber) > 999) {
-              String alternativeId = 'EMP$memberNumber';
-              debugPrint("Trying alternative ID: $alternativeId");
+          // First try employees collection with various ID formats
+          List<String> possibleIds = [
+            'EMP${memberId.padLeft(4, '0')}',  // EMP0001
+            'EMP$memberId',                     // EMP1213
+            memberId,                           // Just the number
+          ];
 
-              final altEmployeeDoc = await FirebaseFirestore.instance
-                  .collection('MasterSheet')
-                  .doc('Employee-Data')
+          // Try employees collection first
+          for (String tryId in possibleIds) {
+            try {
+              debugPrint("Trying employees collection with ID: $tryId");
+              employeeDoc = await FirebaseFirestore.instance
                   .collection('employees')
-                  .doc(alternativeId)
+                  .doc(tryId)
                   .get();
 
-              if (altEmployeeDoc.exists) {
-                debugPrint("Found employee with alternative ID: ${altEmployeeDoc.id}");
-                _teamMembers.add({
-                  'id': altEmployeeDoc.id,
-                  'employeeNumber': memberNumber,
-                  'data': altEmployeeDoc.data(),
-                });
+              if (employeeDoc.exists) {
+                employeeData = employeeDoc.data() as Map<String, dynamic>;
+                debugPrint("Found in employees collection with ID: $tryId");
+                debugPrint("Employee data: $employeeData");
+                break;
+              }
+            } catch (e) {
+              debugPrint("Not found with ID $tryId in employees collection");
+            }
+          }
+
+          // If not found in employees, try MasterSheet
+          if (employeeDoc == null || !employeeDoc.exists) {
+            for (String tryId in possibleIds) {
+              try {
+                debugPrint("Trying MasterSheet with ID: $tryId");
+                employeeDoc = await FirebaseFirestore.instance
+                    .collection('MasterSheet')
+                    .doc('Employee-Data')
+                    .collection('employees')
+                    .doc(tryId)
+                    .get();
+
+                if (employeeDoc.exists) {
+                  employeeData = employeeDoc.data() as Map<String, dynamic>;
+                  debugPrint("Found in MasterSheet with ID: $tryId");
+                  debugPrint("MasterSheet data: $employeeData");
+                  break;
+                }
+              } catch (e) {
+                debugPrint("Not found with ID $tryId in MasterSheet");
               }
             }
           }
+
+          // If still not found, try query by PIN in employees collection
+          if (employeeDoc == null || !employeeDoc.exists) {
+            debugPrint("Trying to find by PIN: $memberId");
+
+            QuerySnapshot pinQuery = await FirebaseFirestore.instance
+                .collection('employees')
+                .where('pin', isEqualTo: memberId)
+                .limit(1)
+                .get();
+
+            if (pinQuery.docs.isNotEmpty) {
+              employeeDoc = pinQuery.docs.first;
+              employeeData = employeeDoc.data() as Map<String, dynamic>;
+              debugPrint("Found by PIN query");
+              debugPrint("Employee data: $employeeData");
+            }
+          }
+
+          if (employeeDoc != null && employeeDoc.exists && employeeData != null) {
+            // Add the found employee
+            _teamMembers.add({
+              'id': employeeDoc.id,
+              'employeeNumber': memberId,
+              'data': employeeData,
+            });
+            debugPrint("Added team member: ${employeeDoc.id} - ${employeeData['employeeName'] ?? employeeData['name'] ?? 'Unknown'}");
+          } else {
+            debugPrint("Employee not found for ID: $memberId - adding placeholder");
+
+            // Add a placeholder with correct field names
+            _teamMembers.add({
+              'id': memberId,
+              'employeeNumber': memberId,
+              'data': {
+                'employeeName': 'Employee $memberId',  // Use 'employeeName' not 'name'
+                'name': 'Employee $memberId',          // Include both for compatibility
+                'designation': 'Unknown',
+                'department': lineManagerData['department'] ?? 'Unknown',
+                'lineManagerDepartment': lineManagerData['department'] ?? 'Unknown',
+              },
+            });
+          }
+
         } catch (e) {
-          debugPrint("Error loading member $memberNumber: $e");
+          debugPrint("Error processing team member $memberId: $e");
+          // Add placeholder even on error
+          _teamMembers.add({
+            'id': memberId,
+            'employeeNumber': memberId,
+            'data': {
+              'employeeName': 'Employee $memberId (Error)',
+              'name': 'Employee $memberId (Error)',
+              'designation': 'Error loading',
+              'department': 'Unknown',
+              'lineManagerDepartment': 'Unknown',
+            },
+          });
         }
       }
 
-      debugPrint("Loaded ${_teamMembers.length} team members out of ${teamMemberNumbers.length}");
+      debugPrint("Successfully loaded ${_teamMembers.length} team members");
 
-      // Load initial attendance (last 2 days)
+      // Load attendance for the default date range
       await _loadAttendance();
 
       setState(() => _isLoading = false);
+
     } catch (e) {
-      debugPrint('Error loading team data: $e');
+      debugPrint('Error in _loadTeamData: $e');
       setState(() => _isLoading = false);
       CustomSnackBar.errorSnackBar("Error loading team data: $e");
     }
@@ -300,6 +408,17 @@ class _TeamManagementViewState extends State<TeamManagementView> with SingleTick
         // Debug print to see what data we have
         debugPrint("Member data for ${member['employeeNumber']}: $memberData");
 
+        // Fix the field names to match your database structure
+        String employeeName = memberData['employeeName'] ??
+            memberData['name'] ??
+            'Unknown';
+
+        String designation = memberData['designation'] ?? 'N/A';
+
+        String department = memberData['department'] ??
+            memberData['lineManagerDepartment'] ??
+            'N/A';
+
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
           elevation: 2,
@@ -309,15 +428,13 @@ class _TeamManagementViewState extends State<TeamManagementView> with SingleTick
               backgroundColor: accentColor,
               radius: 25,
               child: Text(
-                (memberData['employeeName'] ?? 'Unknown')
-                    .substring(0, 1)
-                    .toUpperCase(),
+                employeeName.substring(0, 1).toUpperCase(),
                 style: const TextStyle(
                     color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
               ),
             ),
             title: Text(
-              memberData['employeeName'] ?? 'Unknown',
+              employeeName,
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
             ),
             subtitle: Column(
@@ -325,9 +442,8 @@ class _TeamManagementViewState extends State<TeamManagementView> with SingleTick
               children: [
                 const SizedBox(height: 4),
                 Text('Employee No: ${member['employeeNumber']}'),
-                Text('Designation: ${memberData['designation'] ?? 'N/A'}'),
-                // Sometimes department might be stored in lineManagerDepartment field
-                Text('Department: ${memberData['department'] ?? memberData['lineManagerDepartment'] ?? 'N/A'}'),
+                Text('Designation: $designation'),
+                Text('Department: $department'),
               ],
             ),
             trailing: ElevatedButton(
