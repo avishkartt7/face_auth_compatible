@@ -483,7 +483,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
         debugPrint("Loaded attendance from local database: CheckedIn=$_isCheckedIn");
       }
 
-      // Then try to get fresh data from Firestore if online
+      // If online, try to get fresh data from Firestore as well (which might be more up-to-date)
       if (_connectivityService.currentStatus == ConnectionStatus.online) {
         try {
           DocumentSnapshot attendanceDoc = await FirebaseFirestore.instance
@@ -510,22 +510,11 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
             // Cache the attendance status
             await _saveAttendanceStatusLocally(today, data);
             debugPrint("Fetched and cached fresh attendance status from Firestore");
-          } else {
-            // No attendance record for today
-            setState(() {
-              _isCheckedIn = false;
-              _checkInTime = null;
-            });
-
-            // Clear cached status for today
-            await _clearAttendanceStatusLocally(today);
           }
         } catch (e) {
           debugPrint("Network error fetching attendance status: $e");
           // Continue with local data if network fails
         }
-      } else {
-        debugPrint("Offline mode - using only local attendance data");
       }
     } catch (e) {
       debugPrint("Error fetching attendance: $e");
@@ -813,6 +802,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       });
     } else {
       // For check-out, still require face authentication for security
+      // For check-out, still require face authentication for security
       setState(() {
         _isAuthenticating = true;
       });
@@ -841,6 +831,15 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                     Navigator.of(context).pop();
 
                     if (success) {
+                      // Ensure we have the most up-to-date status before processing checkout
+                      await _ensureFreshAttendanceStatus();
+
+                      // Double check we're still checked in before proceeding
+                      if (!_isCheckedIn) {
+                        CustomSnackBar.errorSnackBar("You are not currently checked in");
+                        return;
+                      }
+
                       // If authentication successful, proceed with check-out using repository
                       bool checkOutSuccess = await _attendanceRepository.recordCheckOut(
                         employeeId: widget.employeeId,
@@ -905,14 +904,14 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   }
 
   // Add the ensure fresh attendance status method
+  // Add the ensure fresh attendance status method
   Future<void> _ensureFreshAttendanceStatus() async {
     String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
 
-    // Always check local first
+    // Always check local database first
     final localAttendance = await _attendanceRepository.getTodaysAttendance(widget.employeeId);
 
     if (localAttendance != null) {
-      // Set state based on local data
       bool hasCheckedIn = localAttendance.checkIn != null;
       bool hasCheckedOut = localAttendance.checkOut != null;
 
@@ -925,12 +924,14 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
         }
       });
 
-      debugPrint("Attendance status - CheckedIn: $_isCheckedIn, HasCheckedOut: $hasCheckedOut");
+      debugPrint("Fresh attendance status - CheckedIn: $_isCheckedIn, HasCheckedOut: $hasCheckedOut");
     } else {
+      // Only if we have no local data at all
       setState(() {
         _isCheckedIn = false;
         _checkInTime = null;
       });
+      debugPrint("No local attendance record found for today");
     }
   }
 
