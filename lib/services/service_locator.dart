@@ -6,6 +6,8 @@ import 'package:face_auth_compatible/services/database_helper.dart';
 import 'package:face_auth_compatible/services/sync_service.dart';
 import 'package:face_auth_compatible/repositories/attendance_repository.dart';
 import 'package:face_auth_compatible/repositories/location_repository.dart';
+// Add this import for the secure face storage service
+import 'package:face_auth_compatible/services/secure_face_storage_service.dart';
 
 final GetIt getIt = GetIt.instance;
 
@@ -13,6 +15,9 @@ void setupServiceLocator() {
   // Services
   getIt.registerSingleton<DatabaseHelper>(DatabaseHelper());
   getIt.registerSingleton<ConnectivityService>(ConnectivityService());
+
+  // Add the secure face storage service
+  getIt.registerSingleton<SecureFaceStorageService>(SecureFaceStorageService());
 
   // Repositories
   getIt.registerSingleton<AttendanceRepository>(

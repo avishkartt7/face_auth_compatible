@@ -2,6 +2,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:io';
+// At the top of lib/register_face/register_face_view.dart
+import 'package:face_auth_compatible/services/secure_face_storage_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:face_auth_compatible/common/utils/extract_face_feature.dart';
 import 'package:face_auth_compatible/common/views/camera_view.dart';
@@ -18,6 +20,7 @@ import 'package:flutter_face_api/face_api.dart' as regula;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:face_auth_compatible/services/connectivity_service.dart';
 import 'package:face_auth_compatible/services/service_locator.dart';
+import 'package:face_auth_compatible/services/secure_face_storage_service.dart';
 
 class RegisterFaceView extends StatefulWidget {
   final String employeeId;
@@ -396,20 +399,24 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
         return;
       }
 
-      // Always save locally for offline use
+      // Get the secure storage service
+      final secureFaceStorage = getIt<SecureFaceStorageService>();
+
+      // Save to secure storage - this will persist even if cache is cleared
+      await secureFaceStorage.saveFaceImage(widget.employeeId, cleanedImage);
+      await secureFaceStorage.saveFaceFeatures(widget.employeeId, _faceFeatures!);
+      await secureFaceStorage.setFaceRegistered(widget.employeeId, true);
+
+      debugPrint("FACE REG: Saved face data to secure storage");
+
+      // Also save to SharedPreferences for backward compatibility
       final prefs = await SharedPreferences.getInstance();
-
-      // 1. Save the base64 image for Regula SDK (online mode)
       await prefs.setString('employee_image_${widget.employeeId}', cleanedImage);
-      debugPrint("FACE REG: Saved face image locally (length: ${cleanedImage.length})");
-
-      // 2. Save the ML Kit face features for offline authentication
       await prefs.setString('employee_face_features_${widget.employeeId}',
           jsonEncode(_faceFeatures!.toJson()));
-      debugPrint("FACE REG: Saved ML Kit face features for offline authentication");
-
-      // 3. Save a face token to indicate registration is complete
       await prefs.setBool('face_registered_${widget.employeeId}', true);
+
+      debugPrint("FACE REG: Also saved to SharedPreferences for compatibility");
 
       // Check connectivity again before Firebase update
       await _checkConnectivity();

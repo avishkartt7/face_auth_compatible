@@ -3,6 +3,8 @@
 import 'dart:convert';
 import 'dart:developer';
 import 'dart:math';
+// At the top of lib/authenticate_face/authenticate_face_view.dart
+import 'package:face_auth_compatible/services/secure_face_storage_service.dart';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -779,20 +781,16 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
     bool hasImageData = false;
 
     try {
-      // First try to get stored image from local storage
+      // Get the secure storage service
+      final secureFaceStorage = getIt<SecureFaceStorageService>();
+
+      // First try to get image from secure storage
       if (widget.employeeId != null) {
-        final prefs = await SharedPreferences.getInstance();
-        storedImage = prefs.getString('employee_image_${widget.employeeId}');
+        storedImage = await secureFaceStorage.getFaceImage(widget.employeeId!);
 
         if (storedImage != null && storedImage.isNotEmpty) {
-          debugPrint("Found locally stored image for ${widget.employeeId}, length: ${storedImage.length}");
+          debugPrint("Found face image in secure storage for ${widget.employeeId}, length: ${storedImage.length}");
           hasImageData = true;
-
-          // Clean the image format if needed
-          if (storedImage.contains('data:image') && storedImage.contains(',')) {
-            storedImage = storedImage.split(',')[1];
-            debugPrint("Cleaned data URL format to pure base64");
-          }
 
           // Update debug info
           setState(() {
@@ -801,11 +799,37 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
             _lastThresholdUsed = _isOfflineMode ? "75.0" : "90.0";
           });
         } else {
-          debugPrint("No local image found for ${widget.employeeId}");
+          debugPrint("No face image found in secure storage, checking SharedPreferences");
+
+          // Fall back to SharedPreferences as a compatibility layer
+          final prefs = await SharedPreferences.getInstance();
+          storedImage = prefs.getString('employee_image_${widget.employeeId}');
+
+          if (storedImage != null && storedImage.isNotEmpty) {
+            debugPrint("Found locally stored image in SharedPreferences, length: ${storedImage.length}");
+            hasImageData = true;
+
+            // Clean the image format if needed
+            if (storedImage.contains('data:image') && storedImage.contains(',')) {
+              storedImage = storedImage.split(',')[1];
+              debugPrint("Cleaned data URL format to pure base64");
+            }
+
+            // Save to secure storage for next time
+            await secureFaceStorage.saveFaceImage(widget.employeeId!, storedImage);
+            debugPrint("Migrated face image to secure storage");
+
+            // Update debug info
+            setState(() {
+              _hasStoredFace = true;
+              _storedImageSize = storedImage!.length;
+              _lastThresholdUsed = _isOfflineMode ? "75.0" : "90.0";
+            });
+          } else {
+            debugPrint("No local image found in SharedPreferences either");
+          }
         }
       }
-
-
 
       // If still no image data, try to get from employeeData as fallback
       if (!hasImageData && employeeData != null) {
@@ -821,6 +845,10 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
           debugPrint("Using image from employeeData, length: ${storedImage?.length ?? 'null'}");
           hasImageData = true;
 
+          // Save to secure storage for future use
+          await secureFaceStorage.saveFaceImage(widget.employeeId!, storedImage!);
+          debugPrint("Saved employeeData image to secure storage");
+
           // Update debug info
           setState(() {
             _hasStoredFace = true;
@@ -832,7 +860,7 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
 
       // If we still don't have image data, show failure
       if (!hasImageData || storedImage == null) {
-        debugPrint("No face image found for authentication");
+        debugPrint("No face image found for authentication in any storage");
         setState(() {
           _lastAuthResult = "Failed - No stored image";
           isMatching = false;
