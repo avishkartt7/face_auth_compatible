@@ -35,6 +35,9 @@
                 <a href="#" class="nav-item" onclick="showSection('mastersheet', event)">
                     <span>📋</span> MasterSheet
                 </a>
+                <a href="#" class="nav-item" onclick="showSection('managers', event)">
+                    <span>👔</span> Managers
+                </a>
                 <a href="#" class="nav-item" onclick="logout()">
                     <span>🚪</span> Logout
                 </a>
@@ -139,18 +142,44 @@
                 <div class="employee-list-container">
                     <table id="mastersheetTable">
                         <thead>
-    <tr>
-        <th>Employee Number</th>
-        <th>Employee Name</th>
-        <th>Designation</th>
-        <th>Salary</th>
-        <th>Overtime</th> <!-- Add this new column -->
-        <th>Created By</th>
-        <th>Created On</th>
-        <th>Actions</th>
-    </tr>
-</thead>
+                            <tr>
+                                <th>Employee Number</th>
+                                <th>Employee Name</th>
+                                <th>Designation</th>
+                                <th>Salary</th>
+                                <th>Overtime</th>
+                                <th>Created By</th>
+                                <th>Created On</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
                         <tbody id="mastersheetData">
+                            <!-- Data will be populated here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Managers Section -->
+            <div id="managersSection" class="section" style="display: none;">
+                <div class="header">
+                    <h1>Line Managers</h1>
+                    <button class="btn-primary" onclick="showAddManagerModal()">Add Line Manager</button>
+                </div>
+
+                <!-- Manager List -->
+                <div class="manager-list-container">
+                    <table id="managerTable">
+                        <thead>
+                            <tr>
+                                <th>Manager PIN</th>
+                                <th>Manager Name</th>
+                                <th>Department</th>
+                                <th>Team Members</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="managerData">
                             <!-- Data will be populated here -->
                         </tbody>
                     </table>
@@ -206,6 +235,70 @@
                     <div class="form-actions">
                         <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
                         <button type="submit" class="btn-primary">Add Employee</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Line Manager Modal -->
+    <div id="addManagerModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Add Line Manager</h2>
+                <span class="close" onclick="closeManagerModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="managerForm">
+                    <div class="form-group">
+                        <label>Select Employee to be Manager</label>
+                        <select id="managerEmployeeSelect" required>
+                            <option value="">-- Select Employee --</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Department</label>
+                        <input type="text" id="managerDepartment" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Team Members (Employee Numbers, comma separated)</label>
+                        <input type="text" id="teamMembers" placeholder="1213, 2745, 3577, 3576">
+                        <small style="color: #666;">Enter employee numbers from MasterSheet</small>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn-secondary" onclick="closeManagerModal()">Cancel</button>
+                        <button type="submit" class="btn-primary">Add Manager</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Manager Modal -->
+    <div id="editManagerModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Edit Line Manager</h2>
+                <span class="close" onclick="closeEditManagerModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="editManagerForm">
+                    <input type="hidden" id="editManagerId">
+                    <div class="form-group">
+                        <label>Manager Name</label>
+                        <input type="text" id="editManagerName" readonly>
+                    </div>
+                    <div class="form-group">
+                        <label>Department</label>
+                        <input type="text" id="editManagerDepartment" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Team Members (Employee PINs, comma separated)</label>
+                        <input type="text" id="editTeamMembers" placeholder="1213, 2745, 3577, 3576">
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn-secondary" onclick="closeEditManagerModal()">Cancel</button>
+                        <button type="submit" class="btn-primary">Update Manager</button>
                     </div>
                 </form>
             </div>

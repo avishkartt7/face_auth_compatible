@@ -14,6 +14,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:face_auth_compatible/model/location_model.dart';
+// Add this import at the top of dashboard_view.dart
+import 'package:face_auth_compatible/dashboard/team_management_view.dart';
 
 // New imports for offline functionality
 import 'package:face_auth_compatible/services/connectivity_service.dart';
@@ -45,6 +47,9 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   late TabController _tabController;
   LocationModel? _nearestLocation;
   List<LocationModel> _availableLocations = [];
+  bool _isLineManager = false;
+  String? _lineManagerDocumentId; // Add this line
+  Map<String, dynamic>? _lineManagerData;
 
   // Geofencing related variables
   bool _isCheckingLocation = false;
@@ -199,6 +204,8 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     setState(() => _isLoading = true);
 
     try {
+      debugPrint("Dashboard loaded with Employee ID: ${widget.employeeId}");
+
       // First try to get from local storage
       Map<String, dynamic>? localData = await _getUserDataLocally();
 
@@ -256,6 +263,94 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
         setState(() => _isLoading = false);
         CustomSnackBar.errorSnackBar("Error fetching user data: $e");
       }
+    }
+
+    // Check if this employee is a line manager - moved outside the first try block
+    // In _fetchUserData method, add more debugging
+    try {
+      // Get the employee's PIN from their data
+      String? employeePin = _userData?['pin'] ?? widget.employeeId;
+
+      debugPrint("=== CHECKING LINE MANAGER STATUS ===");
+      debugPrint("Current Employee ID: ${widget.employeeId}");
+      debugPrint("Employee PIN: $employeePin");
+      debugPrint("User Data available: ${_userData != null}");
+
+      // Try multiple formats to find the line manager document
+      bool isLineManager = false;
+      Map<String, dynamic>? foundLineManagerData;
+
+      // Format 1: Try with direct employee ID
+      debugPrint("Trying format 1: Direct employee ID = ${widget.employeeId}");
+      var lineManagerQuery = await FirebaseFirestore.instance
+          .collection('line_managers')
+          .where('managerId', isEqualTo: widget.employeeId)
+          .limit(1)
+          .get();
+
+      if (lineManagerQuery.docs.isNotEmpty) {
+        isLineManager = true;
+        foundLineManagerData = lineManagerQuery.docs.first.data();
+        debugPrint("✓ Found with direct employee ID");
+      }
+
+      // Format 2: Try with EMP prefix + employee ID
+      if (!isLineManager && !widget.employeeId.startsWith('EMP')) {
+        String empPrefixedId = 'EMP${widget.employeeId}';
+        debugPrint("Trying format 2: EMP prefixed = $empPrefixedId");
+
+        lineManagerQuery = await FirebaseFirestore.instance
+            .collection('line_managers')
+            .where('managerId', isEqualTo: empPrefixedId)
+            .limit(1)
+            .get();
+
+        if (lineManagerQuery.docs.isNotEmpty) {
+          isLineManager = true;
+          foundLineManagerData = lineManagerQuery.docs.first.data();
+          debugPrint("✓ Found with EMP prefix");
+        }
+      }
+
+      // Format 3: Try with PIN
+      if (!isLineManager && employeePin != null) {
+        String pinBasedId = 'EMP$employeePin';
+        debugPrint("Trying format 3: PIN based = $pinBasedId");
+
+        lineManagerQuery = await FirebaseFirestore.instance
+            .collection('line_managers')
+            .where('managerId', isEqualTo: pinBasedId)
+            .limit(1)
+            .get();
+
+        if (lineManagerQuery.docs.isNotEmpty) {
+          isLineManager = true;
+          foundLineManagerData = lineManagerQuery.docs.first.data();
+          debugPrint("✓ Found with PIN");
+        }
+      }
+
+      // Store the results
+      setState(() {
+        _isLineManager = isLineManager;
+        _lineManagerData = foundLineManagerData;
+      });
+
+      debugPrint("=== LINE MANAGER CHECK COMPLETE ===");
+      debugPrint("Is Line Manager: $_isLineManager");
+      if (_isLineManager && _lineManagerData != null) {
+        debugPrint("Line Manager Data: $_lineManagerData");
+        debugPrint("Manager ID: ${_lineManagerData!['managerId']}");
+        debugPrint("Team Members: ${_lineManagerData!['teamMembers']}");
+      }
+      debugPrint("===================================");
+
+    } catch (e) {
+      debugPrint("ERROR checking line manager status: $e");
+      setState(() {
+        _isLineManager = false;
+        _lineManagerData = null;
+      });
     }
   }
 
@@ -1132,94 +1227,104 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Status information
+          // Status information - Fixed overflow issue
           Padding(
             padding: const EdgeInsets.all(16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Left side - Status text
-                Column(
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      "Today's Status",
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(0.8),
-                        fontSize: 14,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Today's Status",
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.8),
+                              fontSize: 14,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _isCheckedIn ? "Checked In" : "Not Started",
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          if (_isCheckedIn && _checkInTime != null)
+                            Text(
+                              "Since ${DateFormat('h:mm a').format(_checkInTime!)}",
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.8),
+                                fontSize: 14,
+                              ),
+                            ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _isCheckedIn ? "Checked In" : "Not Started",
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
+
+                    // Status indicator
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: _isCheckedIn
+                            ? Colors.green.withOpacity(0.3)
+                            : Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _isCheckedIn ? Icons.check_circle : Icons.schedule,
+                            color: Colors.white,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _isCheckedIn ? "Checked in" : "Not checked in",
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    if (_isCheckedIn && _checkInTime != null)
-                      Text(
-                        "Since ${DateFormat('h:mm a').format(_checkInTime!)}",
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.8),
-                          fontSize: 14,
-                        ),
-                      ),
                   ],
                 ),
-
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: ElevatedButton.icon(
-                    icon: const Icon(Icons.bug_report),
-                    label: const Text("OFFLINE AUTH TEST"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
-                    ),
-                    onPressed: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (context) => OfflineTestView(
-                            employeeId: widget.employeeId,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-
-                // Right side - Status indicator
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: _isCheckedIn
-                        ? Colors.green.withOpacity(0.3)
-                        : Colors.white.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        _isCheckedIn ? Icons.check_circle : Icons.schedule,
-                        color: Colors.white,
-                        size: 16,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        _isCheckedIn ? "Checked in" : "Not checked in",
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
               ],
+            ),
+          ),
+
+          // Offline test button - moved to separate row to prevent overflow
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.bug_report),
+              label: const Text("OFFLINE AUTH TEST"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+              ),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => OfflineTestView(
+                      employeeId: widget.employeeId,
+                    ),
+                  ),
+                );
+              },
             ),
           ),
 
@@ -1643,7 +1748,11 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     );
   }
 
+  // Debug version of _buildMenuTab to see what's happening
+
   Widget _buildMenuTab() {
+    debugPrint("Building menu tab. Is Line Manager: $_isLineManager");
+
     return Container(
       color: _isDarkMode ? const Color(0xFF121212) : Colors.grey.shade100,
       child: ListView(
@@ -1663,17 +1772,6 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
               );
             },
           ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.all(16),
-            ),
-            onPressed: () => _testOfflineAuthentication(),
-            child: const Text("TEST OFFLINE AUTHENTICATION",
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ),
 
           _buildMenuOption(
             icon: Icons.dark_mode_outlined,
@@ -1685,6 +1783,135 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                 _isDarkMode = value;
                 _saveDarkModePreference(value);
               });
+            },
+          ),
+
+          // Line Manager Menu Option
+          if (_isLineManager)
+            _buildMenuOption(
+              icon: Icons.people_outline,
+              title: 'My Team',
+              subtitle: 'View team members and attendance',
+              onTap: () {
+                debugPrint("=== MY TEAM BUTTON CLICKED ===");
+                debugPrint("Line Manager Data exists: ${_lineManagerData != null}");
+
+                if (_lineManagerData != null) {
+                  debugPrint("Manager Data: $_lineManagerData");
+
+                  String managerId = _lineManagerData!['managerId'] ?? '';
+                  debugPrint("Manager ID to pass: $managerId");
+
+                  if (managerId.isNotEmpty) {
+                    debugPrint("Navigating to TeamManagementView with managerId: $managerId");
+
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => TeamManagementView(
+                          managerId: managerId,
+                          managerData: _userData!,
+                        ),
+                      ),
+                    ).then((value) {
+                      debugPrint("Returned from TeamManagementView");
+                    }).catchError((error) {
+                      debugPrint("Navigation error: $error");
+                    });
+                  } else {
+                    debugPrint("Manager ID is empty!");
+                    CustomSnackBar.errorSnackBar("Manager ID not found");
+                  }
+                } else {
+                  debugPrint("Line Manager Data is null!");
+                  CustomSnackBar.errorSnackBar("Line manager data not available");
+                }
+
+                debugPrint("=========================");
+              },
+            ),
+
+
+          // Debug menu option when not a line manager
+          if (!_isLineManager)
+            _buildMenuOption(
+              icon: Icons.info_outline,
+              title: 'Debug: Not a Line Manager',
+              subtitle: 'Employee ID: ${widget.employeeId}',
+              onTap: () {
+                showDialog(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Debug Info'),
+                    content: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Employee ID: ${widget.employeeId}'),
+                        Text('Is Line Manager: $_isLineManager'),
+                        Text('User Data Available: ${_userData != null}'),
+                        if (_userData != null) ...[
+                          Text('Name: ${_userData!['name'] ?? 'N/A'}'),
+                          Text('PIN: ${_userData!['pin'] ?? 'N/A'}'),
+                        ],
+                      ],
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Close'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+
+          // Debug force check button
+          _buildMenuOption(
+            icon: Icons.bug_report,
+            title: 'Force Check Line Manager',
+            subtitle: 'Debug tool',
+            onTap: () async {
+              debugPrint("=== FORCE CHECK LINE MANAGER ===");
+              debugPrint("Current Employee ID: ${widget.employeeId}");
+              debugPrint("Current Line Manager Status: $_isLineManager");
+
+              try {
+                // Check all possible formats
+                List<String> possibleIds = [
+                  widget.employeeId,
+                  'EMP${widget.employeeId}',
+                  'EMP${_userData?['pin'] ?? ''}',
+                  _userData?['pin'] ?? '',
+                ];
+
+                for (String id in possibleIds) {
+                  debugPrint("Checking format: $id");
+                  var query = await FirebaseFirestore.instance
+                      .collection('line_managers')
+                      .where('managerId', isEqualTo: id)
+                      .get();
+
+                  if (query.docs.isNotEmpty) {
+                    debugPrint("FOUND! Line manager with ID: $id");
+                    debugPrint("Document data: ${query.docs.first.data()}");
+
+                    setState(() {
+                      _isLineManager = true;
+                    });
+
+                    CustomSnackBar.successSnackBar("You are a line manager!");
+                    return;
+                  }
+                }
+
+                debugPrint("NOT FOUND as line manager with any format");
+                CustomSnackBar.errorSnackBar("Not found as line manager");
+
+              } catch (e) {
+                debugPrint("Error: $e");
+                CustomSnackBar.errorSnackBar("Error: $e");
+              }
             },
           ),
 

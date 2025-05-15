@@ -432,3 +432,39 @@ tr:hover {
 .batch-operations button {
     margin-right: 10px;
 }
+
+/* Managers Section Styles */
+.manager-list-container {
+    margin: 20px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    overflow: auto;
+}
+
+#managersSection .header {
+    background: white;
+    padding: 20px 30px;
+    border-bottom: 1px solid #eee;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+#managersSection table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+#managersSection th {
+    background-color: #f8f8f8;
+    font-weight: 600;
+    color: #333;
+}
+
+#managersSection td {
+    padding: 12px 15px;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+}
