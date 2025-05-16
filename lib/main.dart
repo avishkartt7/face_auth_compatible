@@ -1,5 +1,6 @@
-// lib/main.dart - Updated version with proper sync initialization
+// lib/main.dart
 import 'dart:convert';
+import 'dart:io'; // Add this for Platform
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -15,7 +16,13 @@ import 'package:face_auth_compatible/services/service_locator.dart';
 // Import the new services for offline functionality
 import 'package:face_auth_compatible/services/sync_service.dart';
 import 'package:face_auth_compatible/services/connectivity_service.dart';
+import 'package:face_auth_compatible/services/secure_face_storage_service.dart';
+import 'package:face_auth_compatible/services/face_data_migration_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+
+// Add these imports for permissions
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,12 +34,36 @@ void main() async {
   // Setup service locator
   setupServiceLocator();
 
+  // Check and migrate existing face data
+  final storageService = getIt<SecureFaceStorageService>();
+  final migrationService = FaceDataMigrationService(storageService);
+  await migrationService.migrateExistingData();
+
   // Initialize sync service after service locator is setup
   final syncService = getIt<SyncService>();
   // The sync service will initialize itself in the constructor
   print("Main: Sync service initialized");
 
   runApp(const MyApp());
+}
+
+// In your main app or onboarding screen
+Future<void> requestStoragePermissions() async {
+  if (Platform.isAndroid) {
+    final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
+    final AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
+
+    if (androidInfo.version.sdkInt >= 33) {
+      // Android 13+
+      await Permission.photos.request();
+    } else if (androidInfo.version.sdkInt >= 30) {
+      // Android 11+
+      await Permission.manageExternalStorage.request();
+    } else {
+      // Android 10 and below
+      await Permission.storage.request();
+    }
+  }
 }
 
 // Configure Firestore for offline persistence

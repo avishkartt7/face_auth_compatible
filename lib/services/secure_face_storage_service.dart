@@ -6,312 +6,427 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:face_auth_compatible/model/user_model.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 
 class SecureFaceStorageService {
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
 
-  // Key prefixes
-  static const String _faceImagePrefix = 'secure_face_image_';
-  static const String _faceFeaturesPrefix = 'secure_face_features_';
-  static const String _faceRegistrationPrefix = 'secure_face_registered_';
+  // Company/App identifier for external storage
+  static const String _companyId = 'PhoenicianHR';
+  static const String _appDataFolder = 'FaceData';
 
-  // Get the app's data directory - this directory persists even if cache is cleared
-  Future<String> getAppDataDirectory() async {
-    final appDir = await getApplicationDocumentsDirectory();
-    // Create a specific directory for face data
-    final faceDataDir = Directory('${appDir.path}/face_data');
-    if (!await faceDataDir.exists()) {
-      await faceDataDir.create(recursive: true);
-    }
-    return faceDataDir.path;
-  }
+  // Get truly persistent storage directory
+  Future<Directory?> getPersistentStorageDirectory() async {
+    if (!Platform.isAndroid) return null;
 
-  // Save face image to file instead of just secure storage for extra persistence
-  Future<void> saveFaceImageToFile(String employeeId, String imageBase64) async {
     try {
-      String dataDir = await getAppDataDirectory();
-      File imageFile = File('$dataDir/${employeeId}_face.dat');
-
-      // Encrypt or encode the image data for extra security if needed
-      await imageFile.writeAsString(imageBase64);
-
-      // Store the file path in secure storage
-      await _secureStorage.write(
-        key: '${_faceImagePrefix}file_${employeeId}',
-        value: imageFile.path,
-      );
-
-      print("Face image saved to persistent file: ${imageFile.path}");
-    } catch (e) {
-      print("Error saving face image to file: $e");
-      // Fall back to regular secure storage
-    }
-  }
-
-  // Get face image from file if available
-  Future<String?> getFaceImageFromFile(String employeeId) async {
-    try {
-      // Get file path from secure storage
-      String? filePath = await _secureStorage.read(
-        key: '${_faceImagePrefix}file_${employeeId}',
-      );
-
-      if (filePath != null) {
-        File imageFile = File(filePath);
-        if (await imageFile.exists()) {
-          return await imageFile.readAsString();
-        }
+      // Request storage permissions
+      bool hasPermission = await _requestStoragePermission();
+      if (!hasPermission) {
+        print("SecureFaceStorage: Storage permission denied");
+        return null;
       }
-      return null;
+
+
+
+      future<void> _hasdatapermission("storage allow") <async permission
+      // For Android, we need to use a directory that's not tied to the app---
+      // The best option is the public Documents directory
+
+      // Get external storage directory first
+      final Directory? externalDir = await getExternalStorageDirectory();
+      if (externalDir == null) {
+        print("SecureFaceStorage: External storage not available");
+        return null;
+      }
+
+      // Extract the root path (typically /storage/emulated/0)
+      String storagePath = externalDir.path.split('Android')[0];
+
+      // Create our persistent directory in Documents
+      final Directory persistentDir = Directory('$storagePath/Documents/$_companyId/$_appDataFolder');
+
+      // Create directory if it doesn't exist
+      if (!await persistentDir.exists()) {
+        await persistentDir.create(recursive: true);
+        print("SecureFaceStorage: Created persistent directory at ${persistentDir.path}");
+      } else {
+        print("SecureFaceStorage: Using existing persistent directory at ${persistentDir.path}");
+      }
+
+      return persistentDir;
+
     } catch (e) {
-      print("Error reading face image from file: $e");
+      print("SecureFaceStorage: Error getting persistent storage directory: $e");
       return null;
     }
   }
 
-  // Save face image
-  Future<void> saveFaceImage(String employeeId, String imageBase64) async {
-    // Clean the image data before storing
-    String cleanedImage = imageBase64;
-    if (cleanedImage.contains('data:image') && cleanedImage.contains(',')) {
-      cleanedImage = cleanedImage.split(',')[1];
+  // Request storage permissions with better handling
+  Future<bool> _requestStoragePermission() async {
+    try {
+      if (!Platform.isAndroid) return true;
+
+      final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
+      final AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
+
+      print("SecureFaceStorage: Android SDK: ${androidInfo.version.sdkInt}");
+
+      if (androidInfo.version.sdkInt >= 33) {
+        // Android 13+ - Request photos/media permission
+        var status = await Permission.photos.status;
+        if (!status.isGranted) {
+          status = await Permission.photos.request();
+        }
+        return status.isGranted;
+      } else if (androidInfo.version.sdkInt >= 30) {
+        // Android 11-12 - Need MANAGE_EXTERNAL_STORAGE
+        var status = await Permission.manageExternalStorage.status;
+        if (!status.isGranted) {
+          status = await Permission.manageExternalStorage.request();
+        }
+        return status.isGranted;
+      } else {
+        // Android 10 and below - Regular storage permission
+        var status = await Permission.storage.status;
+        if (!status.isGranted) {
+          status = await Permission.storage.request();
+        }
+        return status.isGranted;
+      }
+    } catch (e) {
+      print("SecureFaceStorage: Error requesting storage permission: $e");
+      return false;
     }
-
-    // First save to secure storage
-    await _secureStorage.write(
-      key: _faceImagePrefix + employeeId,
-      value: cleanedImage,
-    );
-
-    // Also save to file for extra persistence
-    await saveFaceImageToFile(employeeId, cleanedImage);
-
-    // Also mirror to SharedPreferences for backward compatibility
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('employee_image_$employeeId', cleanedImage);
   }
 
-  // Get face image
+  // Save face image to persistent storage
+  Future<void> saveFaceImage(String employeeId, String imageBase64) async {
+    try {
+      print("SecureFaceStorage: Saving face image for employee $employeeId");
+
+      // Clean the image data
+      String cleanedImage = imageBase64;
+      if (cleanedImage.contains('data:image') && cleanedImage.contains(',')) {
+        cleanedImage = cleanedImage.split(',')[1];
+      }
+
+      // CRITICAL: Save to persistent external storage first
+      Directory? persistentDir = await getPersistentStorageDirectory();
+      if (persistentDir != null) {
+        final File persistentFile = File('${persistentDir.path}/${employeeId}_face.dat');
+
+        // Encrypt the data for security
+        String encryptedData = _simpleEncrypt(cleanedImage, employeeId);
+        await persistentFile.writeAsString(encryptedData);
+
+        print("SecureFaceStorage: Face image saved to persistent storage: ${persistentFile.path}");
+
+        // Create a verification file to ensure data was written
+        final File verifyFile = File('${persistentDir.path}/${employeeId}_verify.txt');
+        await verifyFile.writeAsString(DateTime.now().toIso8601String());
+
+        // Create metadata file
+        final File metaFile = File('${persistentDir.path}/${employeeId}_meta.json');
+        Map<String, dynamic> metadata = {
+          'employeeId': employeeId,
+          'savedAt': DateTime.now().toIso8601String(),
+          'imageSize': cleanedImage.length,
+          'appVersion': '1.0.0',
+          'fileType': 'face_image',
+        };
+        await metaFile.writeAsString(jsonEncode(metadata));
+
+        print("SecureFaceStorage: Metadata saved");
+      } else {
+        print("SecureFaceStorage: WARNING - Could not access persistent storage!");
+      }
+
+      // Also save to app's internal storage for faster access
+      await _saveToInternalStorage(employeeId, cleanedImage);
+
+    } catch (e) {
+      print("SecureFaceStorage: Error saving face image: $e");
+      rethrow;
+    }
+  }
+
+  // Save to internal storage (gets cleared on "Clear Storage")
+  Future<void> _saveToInternalStorage(String employeeId, String imageData) async {
+    try {
+      // Save to app documents directory
+      final appDir = await getApplicationDocumentsDirectory();
+      final faceDir = Directory('${appDir.path}/face_data');
+      if (!await faceDir.exists()) {
+        await faceDir.create(recursive: true);
+      }
+
+      final File internalFile = File('${faceDir.path}/${employeeId}_face.dat');
+      await internalFile.writeAsString(imageData);
+
+      // Save to SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('employee_image_$employeeId', imageData);
+
+      // Save to Flutter Secure Storage
+      await _secureStorage.write(
+        key: 'face_image_$employeeId',
+        value: imageData,
+      );
+
+      print("SecureFaceStorage: Saved to internal storage");
+
+    } catch (e) {
+      print("SecureFaceStorage: Error saving to internal storage: $e");
+    }
+  }
+
+  // Get face image (checks all locations with persistent storage priority)
   Future<String?> getFaceImage(String employeeId) async {
     try {
-      // First try to get from secure storage
-      String? image = await _secureStorage.read(key: _faceImagePrefix + employeeId);
+      print("SecureFaceStorage: Retrieving face image for employee $employeeId");
 
-      // If not found, try from file storage
-      if (image == null) {
-        image = await getFaceImageFromFile(employeeId);
-      }
+      // 1. FIRST CHECK PERSISTENT EXTERNAL STORAGE (survives clear storage)
+      Directory? persistentDir = await getPersistentStorageDirectory();
+      if (persistentDir != null) {
+        final File persistentFile = File('${persistentDir.path}/${employeeId}_face.dat');
+        if (await persistentFile.exists()) {
+          print("SecureFaceStorage: Found in persistent storage: ${persistentFile.path}");
 
-      // If still not found, try SharedPreferences as fallback
-      if (image == null) {
-        final prefs = await SharedPreferences.getInstance();
-        image = prefs.getString('employee_image_$employeeId');
+          String encryptedData = await persistentFile.readAsString();
+          String decryptedData = _simpleDecrypt(encryptedData, employeeId);
 
-        // If found in SharedPreferences, migrate it to secure storage and file
-        if (image != null) {
-          await saveFaceImage(employeeId, image);
+          // Verify the data is valid
+          if (decryptedData.isNotEmpty) {
+            print("SecureFaceStorage: Successfully decrypted from persistent storage");
+
+            // Cache it internally for faster access next time
+            await _saveToInternalStorage(employeeId, decryptedData);
+
+            return decryptedData;
+          }
+        } else {
+          print("SecureFaceStorage: Not found in persistent storage");
         }
       }
 
-      return image;
-    } catch (e) {
-      print("Error retrieving face image: $e");
-      return null;
-    }
-  }
-
-  // Save face features to file
-  Future<void> saveFeaturesToFile(String employeeId, FaceFeatures features) async {
-    try {
-      String dataDir = await getAppDataDirectory();
-      File featuresFile = File('$dataDir/${employeeId}_features.dat');
-
-      String featuresJson = jsonEncode(features.toJson());
-      await featuresFile.writeAsString(featuresJson);
-
-      // Store the file path in secure storage
-      await _secureStorage.write(
-        key: '${_faceFeaturesPrefix}file_${employeeId}',
-        value: featuresFile.path,
-      );
-
-      print("Face features saved to persistent file: ${featuresFile.path}");
-    } catch (e) {
-      print("Error saving face features to file: $e");
-    }
-  }
-
-  // Get face features from file
-  Future<FaceFeatures?> getFeaturesFromFile(String employeeId) async {
-    try {
-      // Get file path from secure storage
-      String? filePath = await _secureStorage.read(
-        key: '${_faceFeaturesPrefix}file_${employeeId}',
-      );
-
-      if (filePath != null) {
-        File featuresFile = File(filePath);
-        if (await featuresFile.exists()) {
-          String featuresJson = await featuresFile.readAsString();
-          Map<String, dynamic> jsonMap = jsonDecode(featuresJson);
-          return FaceFeatures.fromJson(jsonMap);
-        }
+      // 2. Check internal storage (faster but gets cleared)
+      final appDir = await getApplicationDocumentsDirectory();
+      final File internalFile = File('${appDir.path}/face_data/${employeeId}_face.dat');
+      if (await internalFile.exists()) {
+        print("SecureFaceStorage: Found in internal storage");
+        return await internalFile.readAsString();
       }
+
+      // 3. Check SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      String? cachedImage = prefs.getString('employee_image_$employeeId');
+      if (cachedImage != null && cachedImage.isNotEmpty) {
+        print("SecureFaceStorage: Found in SharedPreferences");
+        return cachedImage;
+      }
+
+      // 4. Check Flutter Secure Storage
+      String? secureImage = await _secureStorage.read(key: 'face_image_$employeeId');
+      if (secureImage != null && secureImage.isNotEmpty) {
+        print("SecureFaceStorage: Found in secure storage");
+        return secureImage;
+      }
+
+      print("SecureFaceStorage: No face image found for employee $employeeId");
       return null;
+
     } catch (e) {
-      print("Error reading face features from file: $e");
+      print("SecureFaceStorage: Error retrieving face image: $e");
       return null;
     }
   }
 
-  // Save face features
+  // Similar implementations for face features
   Future<void> saveFaceFeatures(String employeeId, FaceFeatures features) async {
-    final String featuresJson = jsonEncode(features.toJson());
+    try {
+      print("SecureFaceStorage: Saving face features for employee $employeeId");
 
-    // First save to secure storage
-    await _secureStorage.write(
-      key: _faceFeaturesPrefix + employeeId,
-      value: featuresJson,
-    );
+      final String featuresJson = jsonEncode(features.toJson());
 
-    // Also save to file for extra persistence
-    await saveFeaturesToFile(employeeId, features);
+      // Save to persistent storage
+      Directory? persistentDir = await getPersistentStorageDirectory();
+      if (persistentDir != null) {
+        final File featuresFile = File('${persistentDir.path}/${employeeId}_features.dat');
+        String encryptedData = _simpleEncrypt(featuresJson, employeeId);
+        await featuresFile.writeAsString(encryptedData);
+        print("SecureFaceStorage: Face features saved to persistent storage");
+      }
 
-    // Mirror to SharedPreferences
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('employee_face_features_$employeeId', featuresJson);
+      // Save to internal storage
+      await _saveFeaturesToInternalStorage(employeeId, featuresJson);
+
+    } catch (e) {
+      print("SecureFaceStorage: Error saving face features: $e");
+      rethrow;
+    }
   }
 
-  // Get face features
   Future<FaceFeatures?> getFaceFeatures(String employeeId) async {
     try {
-      // First check secure storage
-      String? featuresJson = await _secureStorage.read(key: _faceFeaturesPrefix + employeeId);
+      String? featuresJson;
 
-      // If not found, try from file
-      if (featuresJson == null) {
-        FaceFeatures? features = await getFeaturesFromFile(employeeId);
-        if (features != null) {
-          return features;
+      // Check persistent storage first
+      Directory? persistentDir = await getPersistentStorageDirectory();
+      if (persistentDir != null) {
+        final File featuresFile = File('${persistentDir.path}/${employeeId}_features.dat');
+        if (await featuresFile.exists()) {
+          print("SecureFaceStorage: Found features in persistent storage");
+          String encryptedData = await featuresFile.readAsString();
+          featuresJson = _simpleDecrypt(encryptedData, employeeId);
         }
       }
 
-      // Fallback to SharedPreferences
+      // Check internal storage
+      if (featuresJson == null) {
+        final appDir = await getApplicationDocumentsDirectory();
+        final File internalFile = File('${appDir.path}/face_data/${employeeId}_features.dat');
+        if (await internalFile.exists()) {
+          featuresJson = await internalFile.readAsString();
+        }
+      }
+
+      // Check SharedPreferences
       if (featuresJson == null) {
         final prefs = await SharedPreferences.getInstance();
         featuresJson = prefs.getString('employee_face_features_$employeeId');
-
-        // Migrate if found
-        if (featuresJson != null) {
-          Map<String, dynamic> jsonMap = jsonDecode(featuresJson);
-          FaceFeatures features = FaceFeatures.fromJson(jsonMap);
-
-          // Save to secure storage and file for next time
-          await saveFaceFeatures(employeeId, features);
-        }
       }
 
-      if (featuresJson != null) {
+      if (featuresJson != null && featuresJson.isNotEmpty) {
         Map<String, dynamic> jsonMap = jsonDecode(featuresJson);
         return FaceFeatures.fromJson(jsonMap);
       }
 
       return null;
+
     } catch (e) {
-      print("Error retrieving face features: $e");
+      print("SecureFaceStorage: Error retrieving face features: $e");
       return null;
     }
   }
 
   // Set registration status
   Future<void> setFaceRegistered(String employeeId, bool isRegistered) async {
-    await _secureStorage.write(
-      key: _faceRegistrationPrefix + employeeId,
-      value: isRegistered.toString(),
-    );
-
-    // Also save to file
     try {
-      String dataDir = await getAppDataDirectory();
-      File statusFile = File('$dataDir/${employeeId}_status.dat');
-      await statusFile.writeAsString(isRegistered.toString());
-    } catch (e) {
-      print("Error saving status to file: $e");
-    }
+      // Save to persistent storage
+      Directory? persistentDir = await getPersistentStorageDirectory();
+      if (persistentDir != null) {
+        final File statusFile = File('${persistentDir.path}/${employeeId}_status.txt');
+        await statusFile.writeAsString(isRegistered.toString());
+        print("SecureFaceStorage: Registration status saved to persistent storage");
+      }
 
-    // Mirror to SharedPreferences
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('face_registered_$employeeId', isRegistered);
+      // Save to internal locations
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('face_registered_$employeeId', isRegistered);
+
+      await _secureStorage.write(
+        key: 'face_registered_$employeeId',
+        value: isRegistered.toString(),
+      );
+
+    } catch (e) {
+      print("SecureFaceStorage: Error saving registration status: $e");
+    }
+  }
+
+  // Encryption methods
+  String _simpleEncrypt(String text, String key) {
+    final keyBytes = utf8.encode(key.padRight(32).substring(0, 32));
+    final textBytes = utf8.encode(text);
+    final encrypted = List<int>.generate(textBytes.length, (i) {
+      return textBytes[i] ^ keyBytes[i % keyBytes.length];
+    });
+    return base64Encode(encrypted);
+  }
+
+  String _simpleDecrypt(String encrypted, String key) {
+    final keyBytes = utf8.encode(key.padRight(32).substring(0, 32));
+    final encryptedBytes = base64Decode(encrypted);
+    final decrypted = List<int>.generate(encryptedBytes.length, (i) {
+      return encryptedBytes[i] ^ keyBytes[i % keyBytes.length];
+    });
+    return utf8.decode(decrypted);
+  }
+
+  // Helper methods
+  Future<void> _saveFeaturesToInternalStorage(String employeeId, String featuresJson) async {
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final faceDir = Directory('${appDir.path}/face_data');
+      if (!await faceDir.exists()) {
+        await faceDir.create(recursive: true);
+      }
+
+      final File internalFile = File('${faceDir.path}/${employeeId}_features.dat');
+      await internalFile.writeAsString(featuresJson);
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('employee_face_features_$employeeId', featuresJson);
+
+    } catch (e) {
+      print("SecureFaceStorage: Error saving features to internal storage: $e");
+    }
   }
 
   // Check if face is registered
   Future<bool> isFaceRegistered(String employeeId) async {
-    try {
-      // First check secure storage
-      String? status = await _secureStorage.read(key: _faceRegistrationPrefix + employeeId);
-
-      // If not found, check file
-      if (status == null) {
-        try {
-          String dataDir = await getAppDataDirectory();
-          File statusFile = File('$dataDir/${employeeId}_status.dat');
-          if (await statusFile.exists()) {
-            status = await statusFile.readAsString();
-          }
-        } catch (e) {
-          print("Error reading status from file: $e");
-        }
-      }
-
-      // If still not found, check SharedPreferences
-      if (status == null) {
-        // Check SharedPreferences
-        final prefs = await SharedPreferences.getInstance();
-        bool? registeredStatus = prefs.getBool('face_registered_$employeeId');
-
-        if (registeredStatus != null) {
-          // Migrate to secure storage
-          await setFaceRegistered(employeeId, registeredStatus);
-          return registeredStatus;
-        }
-
-        return false;
-      }
-
-      return status.toLowerCase() == 'true';
-    } catch (e) {
-      print("Error checking face registration: $e");
-      return false;
-    }
+    // Check if we have face image in any location
+    String? faceImage = await getFaceImage(employeeId);
+    return faceImage != null && faceImage.isNotEmpty;
   }
 
-  // Delete all face data for a user
+  // Delete all face data (for cleanup)
   Future<void> deleteFaceData(String employeeId) async {
     try {
-      // Delete from secure storage
-      await _secureStorage.delete(key: _faceImagePrefix + employeeId);
-      await _secureStorage.delete(key: _faceFeaturesPrefix + employeeId);
-      await _secureStorage.delete(key: _faceRegistrationPrefix + employeeId);
-      await _secureStorage.delete(key: '${_faceImagePrefix}file_${employeeId}');
-      await _secureStorage.delete(key: '${_faceFeaturesPrefix}file_${employeeId}');
+      // Delete from persistent storage
+      Directory? persistentDir = await getPersistentStorageDirectory();
+      if (persistentDir != null) {
+        final files = [
+          File('${persistentDir.path}/${employeeId}_face.dat'),
+          File('${persistentDir.path}/${employeeId}_features.dat'),
+          File('${persistentDir.path}/${employeeId}_status.txt'),
+          File('${persistentDir.path}/${employeeId}_meta.json'),
+          File('${persistentDir.path}/${employeeId}_verify.txt'),
+        ];
 
-      // Delete files
-      String dataDir = await getAppDataDirectory();
-      File imageFile = File('$dataDir/${employeeId}_face.dat');
-      File featuresFile = File('$dataDir/${employeeId}_features.dat');
-      File statusFile = File('$dataDir/${employeeId}_status.dat');
+        for (var file in files) {
+          if (await file.exists()) {
+            await file.delete();
+          }
+        }
+      }
 
-      if (await imageFile.exists()) await imageFile.delete();
-      if (await featuresFile.exists()) await featuresFile.delete();
-      if (await statusFile.exists()) await statusFile.delete();
+      // Delete from internal storage
+      final appDir = await getApplicationDocumentsDirectory();
+      final internalFiles = [
+        File('${appDir.path}/face_data/${employeeId}_face.dat'),
+        File('${appDir.path}/face_data/${employeeId}_features.dat'),
+      ];
 
-      // Clean up SharedPreferences too
+      for (var file in internalFiles) {
+        if (await file.exists()) {
+          await file.delete();
+        }
+      }
+
+      // Delete from SharedPreferences and Secure Storage
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('employee_image_$employeeId');
       await prefs.remove('employee_face_features_$employeeId');
       await prefs.remove('face_registered_$employeeId');
+
+      await _secureStorage.delete(key: 'face_image_$employeeId');
+      await _secureStorage.delete(key: 'face_registered_$employeeId');
+
     } catch (e) {
-      print("Error deleting face data: $e");
+      print("SecureFaceStorage: Error deleting face data: $e");
     }
   }
 }

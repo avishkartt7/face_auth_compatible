@@ -2,6 +2,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:io';
+import 'package:permission_handler/permission_handler.dart';
+
 // At the top of lib/register_face/register_face_view.dart
 import 'package:face_auth_compatible/services/secure_face_storage_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -504,6 +506,34 @@ class _RegisterFaceViewState extends State<RegisterFaceView> {
         );
       }
     }
+  }
+
+  // In RegisterFaceView, add this method:
+
+  Future<void> _showStoragePermissionDialog() async {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Storage Permission Required"),
+        content: const Text(
+          "This app needs storage permission to save your face data securely. "
+              "This ensures your face authentication works even after clearing app cache.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text("Cancel"),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              await Permission.manageExternalStorage.request();
+            },
+            child: const Text("Grant Permission"),
+          ),
+        ],
+      ),
+    );
   }
 
   // Prepare image for Regula SDK (used in online authentication)
