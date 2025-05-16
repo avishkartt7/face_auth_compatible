@@ -3,6 +3,7 @@
 import 'dart:convert';
 import 'dart:developer';
 import 'dart:math';
+import 'package:permission_handler/permission_handler.dart';
 // At the top of lib/authenticate_face/authenticate_face_view.dart
 import 'package:face_auth_compatible/services/secure_face_storage_service.dart';
 
@@ -784,24 +785,103 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
       // Get the secure storage service
       final secureFaceStorage = getIt<SecureFaceStorageService>();
 
-      // First try to get image from secure storage
-      if (widget.employeeId != null) {
-        storedImage = await secureFaceStorage.getFaceImage(widget.employeeId!);
+      // STRATEGY: In online mode, try Firebase first, then fallback to local storage
+      //           In offline mode, go straight to local storage
 
-        if (storedImage != null && storedImage.isNotEmpty) {
-          debugPrint("Found face image in secure storage for ${widget.employeeId}, length: ${storedImage.length}");
-          hasImageData = true;
+      // If we're online, try to get fresh data from Firebase first
+      if (!_isOfflineMode && widget.employeeId != null) {
+        try {
+          debugPrint("Attempting to get face image from Firebase (online mode)");
 
-          // Update debug info
-          setState(() {
-            _hasStoredFace = true;
-            _storedImageSize = storedImage!.length;
-            _lastThresholdUsed = _isOfflineMode ? "75.0" : "90.0";
-          });
-        } else {
-          debugPrint("No face image found in secure storage, checking SharedPreferences");
+          DocumentSnapshot snapshot = await FirebaseFirestore.instance
+              .collection('employees')
+              .doc(widget.employeeId)
+              .get()
+              .timeout(const Duration(seconds: 5)); // Add timeout
 
-          // Fall back to SharedPreferences as a compatibility layer
+          if (snapshot.exists) {
+            Map<String, dynamic> data = snapshot.data() as Map<String, dynamic>;
+
+            if (data.containsKey('image') && data['image'] != null) {
+              storedImage = data['image'];
+
+              // Clean the image format if needed
+              if (storedImage!.contains('data:image') && storedImage!.contains(',')) {
+                storedImage = storedImage!.split(',')[1];
+                debugPrint("Cleaned data URL format from Firebase data");
+              }
+
+              hasImageData = true;
+              debugPrint("Got face image from Firebase, length: ${storedImage!.length}");
+
+              // Update debug info
+              setState(() {
+                _hasStoredFace = true;
+                _storedImageSize = storedImage!.length;
+                _lastThresholdUsed = "90.0"; // Online threshold
+              });
+
+              // Also save to secure storage for future offline use (don't await this)
+              secureFaceStorage.saveFaceImage(widget.employeeId!, storedImage!)
+                  .catchError((e) {
+                // Just log error but don't fail the authentication
+                debugPrint("Warning: Failed to save Firebase image to secure storage: $e");
+              });
+            } else {
+              debugPrint("Firebase document exists but has no image data");
+            }
+          } else {
+            debugPrint("Employee document not found in Firebase");
+          }
+        } catch (e) {
+          debugPrint("Error accessing Firebase: $e");
+          // Continue to local storage options
+        }
+      }
+
+      // If still no image data or in offline mode, try local secure storage
+      if (!hasImageData && widget.employeeId != null) {
+        try {
+          debugPrint("Trying to get face image from secure storage");
+          storedImage = await secureFaceStorage.getFaceImage(widget.employeeId!);
+
+          if (storedImage != null && storedImage.isNotEmpty) {
+            debugPrint("Found face image in secure storage, length: ${storedImage.length}");
+            hasImageData = true;
+
+            // Update debug info
+            setState(() {
+              _hasStoredFace = true;
+              _storedImageSize = storedImage!.length; // Fix: Added the ! for null safety
+              _lastThresholdUsed = _isOfflineMode ? "75.0" : "90.0";
+            });
+          } else {
+            debugPrint("No face image found in secure storage");
+          }
+        } catch (e) {
+          debugPrint("Error accessing secure storage: $e");
+
+          // Handle specific permission error
+          if (e.toString().contains("Permission denied") ||
+              e.toString().contains("errno = 13")) {
+            debugPrint("Storage permission issue detected");
+
+            // Log the error in debug info
+            setState(() {
+              _lastAuthResult = "Failed - Storage permission denied";
+            });
+
+            // Show a specific dialog for permission issues
+            _showStoragePermissionErrorDialog();
+            return;
+          }
+        }
+      }
+
+      // If still no image, try SharedPreferences as fallback
+      if (!hasImageData && widget.employeeId != null) {
+        try {
+          debugPrint("Trying SharedPreferences fallback");
           final prefs = await SharedPreferences.getInstance();
           storedImage = prefs.getString('employee_image_${widget.employeeId}');
 
@@ -815,23 +895,27 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
               debugPrint("Cleaned data URL format to pure base64");
             }
 
-            // Save to secure storage for next time
-            await secureFaceStorage.saveFaceImage(widget.employeeId!, storedImage);
-            debugPrint("Migrated face image to secure storage");
-
             // Update debug info
             setState(() {
               _hasStoredFace = true;
-              _storedImageSize = storedImage!.length;
+              _storedImageSize = storedImage!.length; // Fix: Added the ! for null safety
               _lastThresholdUsed = _isOfflineMode ? "75.0" : "90.0";
             });
+
+            // Also try to save to secure storage for next time (don't await)
+            secureFaceStorage.saveFaceImage(widget.employeeId!, storedImage)
+                .catchError((e) {
+              debugPrint("Warning: Failed to migrate SharedPreferences image to secure storage: $e");
+            });
           } else {
-            debugPrint("No local image found in SharedPreferences either");
+            debugPrint("No local image found in SharedPreferences");
           }
+        } catch (e) {
+          debugPrint("Error checking SharedPreferences: $e");
         }
       }
 
-      // If still no image data, try to get from employeeData as fallback
+      // Last resort: check employeeData if available
       if (!hasImageData && employeeData != null) {
         if (employeeData!.containsKey('image') && employeeData!['image'] != null) {
           storedImage = employeeData!['image'];
@@ -845,16 +929,20 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
           debugPrint("Using image from employeeData, length: ${storedImage?.length ?? 'null'}");
           hasImageData = true;
 
-          // Save to secure storage for future use
-          await secureFaceStorage.saveFaceImage(widget.employeeId!, storedImage!);
-          debugPrint("Saved employeeData image to secure storage");
-
           // Update debug info
           setState(() {
             _hasStoredFace = true;
             _storedImageSize = storedImage!.length;
             _lastThresholdUsed = _isOfflineMode ? "75.0" : "90.0";
           });
+
+          // Also try to save to secure storage (don't await)
+          if (widget.employeeId != null) {
+            secureFaceStorage.saveFaceImage(widget.employeeId!, storedImage!)
+                .catchError((e) {
+              debugPrint("Warning: Failed to save employeeData image to secure storage: $e");
+            });
+          }
         }
       }
 
@@ -1022,6 +1110,50 @@ class _AuthenticateFaceViewState extends State<AuthenticateFaceView> {
       if (widget.onAuthenticationComplete != null) {
         widget.onAuthenticationComplete!(false);
       }
+    }
+  }
+
+
+
+
+// Add this new method to handle storage permission errors
+  void _showStoragePermissionErrorDialog() {
+    if (!mounted) return;
+
+    _playFailedAudio;
+    showDialog(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: const Text("Storage Permission Error"),
+        content: const Text(
+          "The app couldn't access the secure storage for face data. This is needed for offline authentication.\n\n"
+              "Please go to Settings > Apps > PHOENICIAN > Permissions and grant 'Files and media' permission.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              openAppSettings(); // Make sure this function exists in your package
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: accentColor,
+            ),
+            child: const Text("Open Settings"),
+          ),
+        ],
+      ),
+    );
+
+    setState(() {
+      isMatching = false;
+    });
+
+    if (widget.onAuthenticationComplete != null) {
+      widget.onAuthenticationComplete!(false);
     }
   }
 

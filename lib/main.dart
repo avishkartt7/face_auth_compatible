@@ -30,6 +30,7 @@ void main() async {
 
   // Initialize Firestore for offline persistence
   await _initializeFirestoreOfflineMode();
+  await requestAppPermissions();
 
   // Setup service locator
   setupServiceLocator();
@@ -62,6 +63,44 @@ Future<void> requestStoragePermissions() async {
     } else {
       // Android 10 and below
       await Permission.storage.request();
+    }
+  }
+}
+
+Future<void> requestAppPermissions() async {
+  if (Platform.isAndroid) {
+    try {
+      final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
+      final AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
+
+      print("Requesting app permissions for Android SDK: ${androidInfo.version.sdkInt}");
+
+      // Request different permissions based on Android version
+      if (androidInfo.version.sdkInt >= 33) {
+        // Android 13+
+        await Permission.photos.request();
+        await Permission.mediaLibrary.request();
+      } else if (androidInfo.version.sdkInt >= 30) {
+        // Android 11-12
+        // For Android 11+, we'll use the fallback storage location
+        // that doesn't require special permissions
+        await Permission.storage.request();
+      } else {
+        // Android 10 and below
+        await Permission.storage.request();
+      }
+
+      // Show a dialog explaining permissions if needed
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      bool hasShownPermissionDialog = prefs.getBool('has_shown_permission_dialog') ?? false;
+
+      if (!hasShownPermissionDialog) {
+        // We can't show a dialog here since we don't have a context yet,
+        // so we'll set a flag to show it later in the app
+        prefs.setBool('show_permission_dialog_on_start', true);
+      }
+    } catch (e) {
+      print("Error requesting app permissions: $e");
     }
   }
 }

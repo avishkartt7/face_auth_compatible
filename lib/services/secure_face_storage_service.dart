@@ -2,6 +2,7 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
@@ -21,49 +22,51 @@ class SecureFaceStorageService {
     if (!Platform.isAndroid) return null;
 
     try {
-      // Request storage permissions
+      // First try regular storage permissions
       bool hasPermission = await _requestStoragePermission();
-      if (!hasPermission) {
-        print("SecureFaceStorage: Storage permission denied");
-        return null;
+
+      final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
+      final AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
+
+      // For Android 11+ (API 30+), or if permissions were denied,
+      // use the fallback directory that doesn't require special permissions
+      if (androidInfo.version.sdkInt >= 30 || !hasPermission) {
+        return await _getFallbackStorageDirectory();
       }
 
+      // For Android 10 and below with granted permissions, use the Documents directory
+      if (hasPermission) {
+        final Directory? externalDir = await getExternalStorageDirectory();
+        if (externalDir == null) {
+          print("SecureFaceStorage: External storage not available");
+          return await _getFallbackStorageDirectory();
+        }
 
+        // Extract the root path (typically /storage/emulated/0)
+        String storagePath = externalDir.path.split('Android')[0];
 
-      future<void> _hasdatapermission("storage allow") <async permission
-      // For Android, we need to use a directory that's not tied to the app---
-      // The best option is the public Documents directory
+        // Create our persistent directory in Documents
+        final Directory persistentDir = Directory('$storagePath/Documents/$_companyId/$_appDataFolder');
 
-      // Get external storage directory first
-      final Directory? externalDir = await getExternalStorageDirectory();
-      if (externalDir == null) {
-        print("SecureFaceStorage: External storage not available");
-        return null;
+        // Create directory if it doesn't exist
+        if (!await persistentDir.exists()) {
+          await persistentDir.create(recursive: true);
+          print("SecureFaceStorage: Created persistent directory at ${persistentDir.path}");
+        }
+
+        return persistentDir;
       }
 
-      // Extract the root path (typically /storage/emulated/0)
-      String storagePath = externalDir.path.split('Android')[0];
-
-      // Create our persistent directory in Documents
-      final Directory persistentDir = Directory('$storagePath/Documents/$_companyId/$_appDataFolder');
-
-      // Create directory if it doesn't exist
-      if (!await persistentDir.exists()) {
-        await persistentDir.create(recursive: true);
-        print("SecureFaceStorage: Created persistent directory at ${persistentDir.path}");
-      } else {
-        print("SecureFaceStorage: Using existing persistent directory at ${persistentDir.path}");
-      }
-
-      return persistentDir;
-
+      // Fallback if something went wrong
+      return await _getFallbackStorageDirectory();
     } catch (e) {
       print("SecureFaceStorage: Error getting persistent storage directory: $e");
-      return null;
+      // Return fallback directory in case of error
+      return await _getFallbackStorageDirectory();
     }
   }
 
-  // Request storage permissions with better handling
+  // Fix for the _requestStoragePermission method in SecureFaceStorageService
   Future<bool> _requestStoragePermission() async {
     try {
       if (!Platform.isAndroid) return true;
@@ -85,6 +88,12 @@ class SecureFaceStorageService {
         var status = await Permission.manageExternalStorage.status;
         if (!status.isGranted) {
           status = await Permission.manageExternalStorage.request();
+
+          // If still not granted after request
+          if (!status.isGranted) {
+            // We cannot show UI here, just log the issue
+            print("SecureFaceStorage: MANAGE_EXTERNAL_STORAGE permission denied. User may need to grant it manually in settings.");
+          }
         }
         return status.isGranted;
       } else {
@@ -101,7 +110,44 @@ class SecureFaceStorageService {
     }
   }
 
-  // Save face image to persistent storage
+  void showPermissionExplanationDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Storage Permission Required"),
+        content: const Text(
+          "This app needs storage permission to save face data securely. "
+              "You'll be directed to app settings. Please grant 'All files access' permission.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text("OK"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<Directory?> _getFallbackStorageDirectory() async {
+    try {
+      // Get app's external files directory (doesn't require special permissions)
+      final List<Directory>? externalDirs = await getExternalStorageDirectories();
+      if (externalDirs != null && externalDirs.isNotEmpty) {
+        final Directory fallbackDir = Directory('${externalDirs[0].path}/$_appDataFolder');
+        if (!await fallbackDir.exists()) {
+          await fallbackDir.create(recursive: true);
+        }
+        print("SecureFaceStorage: Using fallback directory: ${fallbackDir.path}");
+        return fallbackDir;
+      }
+      return null;
+    } catch (e) {
+      print("Error getting fallback directory: $e");
+      return null;
+    }
+  }
+
   Future<void> saveFaceImage(String employeeId, String imageBase64) async {
     try {
       print("SecureFaceStorage: Saving face image for employee $employeeId");
@@ -243,7 +289,7 @@ class SecureFaceStorageService {
     }
   }
 
-  // Similar implementations for face features
+  // Save face features to persistent storage
   Future<void> saveFaceFeatures(String employeeId, FaceFeatures features) async {
     try {
       print("SecureFaceStorage: Saving face features for employee $employeeId");
@@ -268,6 +314,26 @@ class SecureFaceStorageService {
     }
   }
 
+  Future<void> _saveFeaturesToInternalStorage(String employeeId, String featuresJson) async {
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final faceDir = Directory('${appDir.path}/face_data');
+      if (!await faceDir.exists()) {
+        await faceDir.create(recursive: true);
+      }
+
+      final File internalFile = File('${faceDir.path}/${employeeId}_features.dat');
+      await internalFile.writeAsString(featuresJson);
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('employee_face_features_$employeeId', featuresJson);
+
+    } catch (e) {
+      print("SecureFaceStorage: Error saving features to internal storage: $e");
+    }
+  }
+
+  // Get face features (checks all locations with persistent storage priority)
   Future<FaceFeatures?> getFaceFeatures(String employeeId) async {
     try {
       String? featuresJson;
@@ -353,26 +419,6 @@ class SecureFaceStorageService {
       return encryptedBytes[i] ^ keyBytes[i % keyBytes.length];
     });
     return utf8.decode(decrypted);
-  }
-
-  // Helper methods
-  Future<void> _saveFeaturesToInternalStorage(String employeeId, String featuresJson) async {
-    try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final faceDir = Directory('${appDir.path}/face_data');
-      if (!await faceDir.exists()) {
-        await faceDir.create(recursive: true);
-      }
-
-      final File internalFile = File('${faceDir.path}/${employeeId}_features.dat');
-      await internalFile.writeAsString(featuresJson);
-
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('employee_face_features_$employeeId', featuresJson);
-
-    } catch (e) {
-      print("SecureFaceStorage: Error saving features to internal storage: $e");
-    }
   }
 
   // Check if face is registered
