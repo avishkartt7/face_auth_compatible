@@ -30,6 +30,7 @@ import 'package:face_auth_compatible/repositories/location_repository.dart';
 import 'package:face_auth_compatible/services/sync_service.dart';
 import 'package:face_auth_compatible/services/service_locator.dart';
 import 'package:face_auth_compatible/test/offline_test_view.dart';
+import 'package:face_auth_compatible/dashboard/check_in_out_handler.dart';
 
 class DashboardView extends StatefulWidget {
   final String employeeId;
@@ -813,34 +814,45 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                       // Get current position
                       Position? currentPosition = await GeofenceUtil.getCurrentPosition();
 
-                      // If authentication successful, proceed with check-in using repository
-                      bool checkInSuccess = await _attendanceRepository.recordCheckIn(
+                      // If authentication successful, handle check-in with geofence
+                      await CheckInOutHandler.handleOffLocationAction(
+                        context: context,
                         employeeId: widget.employeeId,
-                        checkInTime: DateTime.now(),
-                        locationId: _nearestLocation?.id ?? 'default',
-                        locationName: _nearestLocation?.name ?? 'Unknown',
-                        locationLat: currentPosition?.latitude ?? _nearestLocation!.latitude,
-                        locationLng: currentPosition?.longitude ?? _nearestLocation!.longitude,
-                      );
+                        employeeName: _userData?['name'] ?? 'Employee',
+                        isWithinGeofence: _isWithinGeofence,
+                        currentPosition: currentPosition,
+                        isCheckIn: true, // This is check-in
+                        onRegularAction: () async {
+                          // Regular check-in process when within geofence
+                          bool checkInSuccess = await _attendanceRepository.recordCheckIn(
+                            employeeId: widget.employeeId,
+                            checkInTime: DateTime.now(),
+                            locationId: _nearestLocation?.id ?? 'default',
+                            locationName: _nearestLocation?.name ?? 'Unknown',
+                            locationLat: currentPosition?.latitude ?? _nearestLocation!.latitude,
+                            locationLng: currentPosition?.longitude ?? _nearestLocation!.longitude,
+                          );
 
-                      if (checkInSuccess) {
-                        setState(() {
-                          _isCheckedIn = true;
-                          _checkInTime = DateTime.now();
+                          if (checkInSuccess) {
+                            setState(() {
+                              _isCheckedIn = true;
+                              _checkInTime = DateTime.now();
 
-                          // If offline, mark that we need to sync later
-                          if (_connectivityService.currentStatus == ConnectionStatus.offline) {
-                            _needsSync = true;
+                              // If offline, mark that we need to sync later
+                              if (_connectivityService.currentStatus == ConnectionStatus.offline) {
+                                _needsSync = true;
+                              }
+                            });
+
+                            CustomSnackBar.successSnackBar("Checked in successfully at $_currentTime");
+
+                            // Refresh activity list
+                            _fetchRecentActivity();
+                          } else {
+                            CustomSnackBar.errorSnackBar("Failed to record check-in. Please try again.");
                           }
-                        });
-
-                        CustomSnackBar.successSnackBar("Checked in successfully at $_currentTime");
-
-                        // Refresh activity list
-                        _fetchRecentActivity();
-                      } else {
-                        CustomSnackBar.errorSnackBar("Failed to record check-in. Please try again.");
-                      }
+                        },
+                      );
                     } else {
                       // If authentication failed, show error message
                       CustomSnackBar.errorSnackBar("Face authentication failed. Check-in canceled.");
@@ -860,7 +872,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
         }
       });
     } else {
-      // CHECK-OUT LOGIC (UPDATED FOR GEOFENCE CHECKING)
+      // CHECK-OUT FLOW
       setState(() {
         _isAuthenticating = true;
       });
@@ -902,14 +914,15 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                         return;
                       }
 
-                      // If face auth successful, handle check-out with geofence check
-                      await CheckoutHandler.handleCheckOut(
+                      // If face auth successful, handle check-out with geofence
+                      await CheckInOutHandler.handleOffLocationAction(
                         context: context,
                         employeeId: widget.employeeId,
                         employeeName: _userData?['name'] ?? 'Employee',
                         isWithinGeofence: _isWithinGeofence,
                         currentPosition: currentPosition,
-                        onRegularCheckOut: () async {
+                        isCheckIn: false, // This is check-out
+                        onRegularAction: () async {
                           // Proceed with regular check-out process
                           bool checkOutSuccess = await _attendanceRepository.recordCheckOut(
                             employeeId: widget.employeeId,
@@ -1948,6 +1961,8 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
               showStatusIcon: _pendingApprovalRequests > 0,
               statusIcon: Icons.notifications_active,
               statusColor: Colors.orange,
+              showBadge: _pendingApprovalRequests > 0,
+              badgeCount: _pendingApprovalRequests,
             ),
           ],
 
@@ -2165,6 +2180,8 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     bool showStatusIcon = false,
     IconData? statusIcon,
     Color? statusColor,
+    bool showBadge = false,
+    int badgeCount = 0,
   }) {
     // Adjust colors for dark mode
     if (_isDarkMode) {
@@ -2196,10 +2213,39 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                       : Colors.grey.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Icon(
-                  icon,
-                  color: iconColor,
-                  size: 22,
+                child: Stack(
+                  children: [
+                    Icon(
+                      icon,
+                      color: iconColor,
+                      size: 22,
+                    ),
+                    if (showBadge && badgeCount > 0)
+                      Positioned(
+                        right: -3,
+                        top: -3,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                          constraints: const BoxConstraints(
+                            minWidth: 16,
+                            minHeight: 16,
+                          ),
+                          child: Text(
+                            badgeCount.toString(),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
               const SizedBox(width: 16),

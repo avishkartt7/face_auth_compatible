@@ -1,4 +1,4 @@
-// lib/checkout_request/create_request_view.dart
+// lib/checkout_request/create_request_view.dart - Updated version
 
 import 'package:flutter/material.dart';
 import 'package:face_auth_compatible/constants/theme.dart';
@@ -16,6 +16,8 @@ class CreateCheckOutRequestView extends StatefulWidget {
   final String employeeName;
   final Position currentPosition;
   final VoidCallback? onRequestSubmitted;
+  // Added new field for passing extra data without changing constructor
+  final Map<String, dynamic>? extra;
 
   const CreateCheckOutRequestView({
     Key? key,
@@ -23,6 +25,7 @@ class CreateCheckOutRequestView extends StatefulWidget {
     required this.employeeName,
     required this.currentPosition,
     this.onRequestSubmitted,
+    this.extra,
   }) : super(key: key);
 
   @override
@@ -35,14 +38,28 @@ class _CreateCheckOutRequestViewState extends State<CreateCheckOutRequestView> {
 
   bool _isLoading = false;
   String _locationName = "Fetching location...";
-  String? _lineManagerId;
   String _lineManagerName = "Unknown";
+  String? _lineManagerId;
+  bool _isCheckIn = false; // Default to check-out
 
   @override
   void initState() {
     super.initState();
     _getLocationName();
-    _getLineManagerInfo();
+
+    // Extract parameters from extra map if available
+    if (widget.extra != null) {
+      _lineManagerId = widget.extra!['lineManagerId'];
+      _isCheckIn = widget.extra!['isCheckIn'] ?? false;
+    }
+
+    // Get manager info based on lineManagerId
+    if (_lineManagerId != null) {
+      _getLineManagerInfo(_lineManagerId!);
+    } else {
+      // If no lineManagerId provided, try to find one
+      _findLineManager();
+    }
   }
 
   @override
@@ -75,8 +92,8 @@ class _CreateCheckOutRequestViewState extends State<CreateCheckOutRequestView> {
     }
   }
 
-  // Get line manager information
-  Future<void> _getLineManagerInfo() async {
+  // Find line manager if not provided
+  Future<void> _findLineManager() async {
     try {
       // First try to get from shared preferences (faster)
       SharedPreferences prefs = await SharedPreferences.getInstance();
@@ -152,6 +169,21 @@ class _CreateCheckOutRequestViewState extends State<CreateCheckOutRequestView> {
         }
       }
 
+      // If still not found, try to find any manager
+      final managerQuery = await FirebaseFirestore.instance
+          .collection('employees')
+          .where('isManager', isEqualTo: true)
+          .limit(1)
+          .get();
+
+      if (managerQuery.docs.isNotEmpty) {
+        setState(() {
+          _lineManagerId = managerQuery.docs[0].id;
+          _lineManagerName = managerQuery.docs[0].data()['name'] ?? "Default Manager";
+        });
+        return;
+      }
+
       // If still not found, set default values
       setState(() {
         _lineManagerId = null;
@@ -159,9 +191,71 @@ class _CreateCheckOutRequestViewState extends State<CreateCheckOutRequestView> {
       });
 
     } catch (e) {
-      print("Error getting line manager info: $e");
+      print("Error finding line manager: $e");
       setState(() {
         _lineManagerId = null;
+        _lineManagerName = "Error finding manager";
+      });
+    }
+  }
+
+  // Get line manager information
+  Future<void> _getLineManagerInfo(String managerId) async {
+    try {
+      // Use the provided lineManagerId to get manager details
+      final managerDoc = await FirebaseFirestore.instance
+          .collection('employees')
+          .doc(managerId)
+          .get();
+
+      if (managerDoc.exists) {
+        setState(() {
+          _lineManagerName = managerDoc.data()?['name'] ?? "Unknown Manager";
+        });
+
+        // Save for future use
+        SharedPreferences prefs = await SharedPreferences.getInstance();
+        await prefs.setString('line_manager_id_${widget.employeeId}', managerId);
+        await prefs.setString('line_manager_name_${widget.employeeId}', _lineManagerName);
+        return;
+      }
+
+      // If the ID format is different, try with EMP prefix
+      if (!managerId.startsWith('EMP')) {
+        final altManagerDoc = await FirebaseFirestore.instance
+            .collection('employees')
+            .doc('EMP$managerId')
+            .get();
+
+        if (altManagerDoc.exists) {
+          setState(() {
+            _lineManagerName = altManagerDoc.data()?['name'] ?? "Unknown Manager";
+          });
+          return;
+        }
+      }
+
+      // If still not found, check if the ID is already with EMP prefix
+      if (managerId.startsWith('EMP')) {
+        final altManagerDoc = await FirebaseFirestore.instance
+            .collection('employees')
+            .doc(managerId.substring(3))
+            .get();
+
+        if (altManagerDoc.exists) {
+          setState(() {
+            _lineManagerName = altManagerDoc.data()?['name'] ?? "Unknown Manager";
+          });
+          return;
+        }
+      }
+
+      setState(() {
+        _lineManagerName = "Manager (ID: $managerId)";
+      });
+    } catch (e) {
+      print("Error getting line manager info: $e");
+      setState(() {
         _lineManagerName = "Error finding manager";
       });
     }
@@ -182,7 +276,7 @@ class _CreateCheckOutRequestViewState extends State<CreateCheckOutRequestView> {
     });
 
     try {
-      // Create the request
+      // Create the request with the appropriate type
       CheckOutRequest request = CheckOutRequest.createNew(
         employeeId: widget.employeeId,
         employeeName: widget.employeeName,
@@ -191,6 +285,7 @@ class _CreateCheckOutRequestViewState extends State<CreateCheckOutRequestView> {
         longitude: widget.currentPosition.longitude,
         locationName: _locationName,
         reason: _reasonController.text.trim(),
+        requestType: _isCheckIn ? 'check-in' : 'check-out',
       );
 
       // Save the request
@@ -198,7 +293,9 @@ class _CreateCheckOutRequestViewState extends State<CreateCheckOutRequestView> {
       bool success = await repository.createCheckOutRequest(request);
 
       if (success) {
-        CustomSnackBar.successSnackBar("Check-out request submitted successfully");
+        CustomSnackBar.successSnackBar(
+            "${_isCheckIn ? 'Check-in' : 'Check-out'} request submitted successfully"
+        );
 
         // Call the callback if provided
         if (widget.onRequestSubmitted != null) {
@@ -226,7 +323,7 @@ class _CreateCheckOutRequestViewState extends State<CreateCheckOutRequestView> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Request Check-Out"),
+        title: Text("Request ${_isCheckIn ? 'Check-In' : 'Check-Out'}"),
         backgroundColor: scaffoldTopGradientClr,
       ),
       body: Container(
@@ -258,9 +355,9 @@ class _CreateCheckOutRequestViewState extends State<CreateCheckOutRequestView> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           "You are outside the office geofence",
-                          style: TextStyle(
+                          style: const TextStyle(
                             color: Colors.white,
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
@@ -268,7 +365,7 @@ class _CreateCheckOutRequestViewState extends State<CreateCheckOutRequestView> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          "To check out from your current location, you need approval from your line manager.",
+                          "To ${_isCheckIn ? 'check in' : 'check out'} from your current location, you need approval from your line manager.",
                           style: TextStyle(
                             color: Colors.white.withOpacity(0.9),
                             fontSize: 14,
@@ -356,10 +453,10 @@ class _CreateCheckOutRequestViewState extends State<CreateCheckOutRequestView> {
 
                   const SizedBox(height: 24),
 
-                  // Reason for checking out
-                  const Text(
-                    "Reason for Checking Out",
-                    style: TextStyle(
+                  // Reason for action
+                  Text(
+                    "Reason for ${_isCheckIn ? 'Checking In' : 'Checking Out'}",
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -416,9 +513,9 @@ class _CreateCheckOutRequestViewState extends State<CreateCheckOutRequestView> {
                       ),
                       child: _isLoading
                           ? const CircularProgressIndicator(color: Colors.white)
-                          : const Text(
+                          : Text(
                         "Submit Request",
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
                         ),

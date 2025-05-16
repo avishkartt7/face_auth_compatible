@@ -1,4 +1,4 @@
-// lib/checkout_request/request_history_view.dart
+// lib/checkout_request/request_history_view.dart - Updated version
 
 import 'package:flutter/material.dart';
 import 'package:face_auth_compatible/constants/theme.dart';
@@ -19,14 +19,43 @@ class CheckOutRequestHistoryView extends StatefulWidget {
   State<CheckOutRequestHistoryView> createState() => _CheckOutRequestHistoryViewState();
 }
 
-class _CheckOutRequestHistoryViewState extends State<CheckOutRequestHistoryView> {
+class _CheckOutRequestHistoryViewState extends State<CheckOutRequestHistoryView> with SingleTickerProviderStateMixin {
   bool _isLoading = true;
   List<CheckOutRequest> _requests = [];
+  late TabController _tabController;
+  String _filterType = 'all'; // 'all', 'check-in', or 'check-out'
 
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 3, vsync: this);
+    _tabController.addListener(_handleTabChange);
     _loadRequests();
+  }
+
+  @override
+  void dispose() {
+    _tabController.removeListener(_handleTabChange);
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  void _handleTabChange() {
+    if (_tabController.indexIsChanging) return;
+
+    setState(() {
+      switch (_tabController.index) {
+        case 0:
+          _filterType = 'all';
+          break;
+        case 1:
+          _filterType = 'check-in';
+          break;
+        case 2:
+          _filterType = 'check-out';
+          break;
+      }
+    });
   }
 
   Future<void> _loadRequests() async {
@@ -85,10 +114,25 @@ class _CheckOutRequestHistoryViewState extends State<CheckOutRequestHistoryView>
 
   @override
   Widget build(BuildContext context) {
+    // Filter requests based on selected tab
+    List<CheckOutRequest> filteredRequests = _filterType == 'all'
+        ? _requests
+        : _requests.where((req) => req.requestType == _filterType).toList();
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Check-Out Requests"),
+        title: const Text("Request History"),
         backgroundColor: scaffoldTopGradientClr,
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [
+            Tab(text: "All"),
+            Tab(text: "Check-In"),
+            Tab(text: "Check-Out"),
+          ],
+          labelColor: Colors.white,
+          indicatorColor: Colors.white,
+        ),
       ),
       body: Container(
         decoration: const BoxDecoration(
@@ -103,13 +147,13 @@ class _CheckOutRequestHistoryViewState extends State<CheckOutRequestHistoryView>
         ),
         child: _isLoading
             ? const Center(child: CircularProgressIndicator(color: accentColor))
-            : _requests.isEmpty
+            : filteredRequests.isEmpty
             ? _buildEmptyState()
             : ListView.builder(
           padding: const EdgeInsets.all(16),
-          itemCount: _requests.length,
+          itemCount: filteredRequests.length,
           itemBuilder: (context, index) {
-            return _buildRequestCard(_requests[index]);
+            return _buildRequestCard(filteredRequests[index]);
           },
         ),
       ),
@@ -128,7 +172,9 @@ class _CheckOutRequestHistoryViewState extends State<CheckOutRequestHistoryView>
           ),
           const SizedBox(height: 16),
           Text(
-            "No check-out requests yet",
+            _filterType == 'all'
+                ? "No requests found"
+                : "No ${_filterType.replaceAll('-', ' ')} requests found",
             style: TextStyle(
               color: Colors.white.withOpacity(0.7),
               fontSize: 18,
@@ -136,7 +182,7 @@ class _CheckOutRequestHistoryViewState extends State<CheckOutRequestHistoryView>
           ),
           const SizedBox(height: 8),
           Text(
-            "When you request to check out from a location outside the office, it will appear here",
+            "When you request to ${_filterType == 'check-in' ? 'check in' : _filterType == 'check-out' ? 'check out' : 'check in/out'} from a location outside the office, it will appear here",
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Colors.white.withOpacity(0.5),
@@ -162,7 +208,7 @@ class _CheckOutRequestHistoryViewState extends State<CheckOutRequestHistoryView>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Status and date
+            // Status and date with request type badge
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -173,30 +219,59 @@ class _CheckOutRequestHistoryViewState extends State<CheckOutRequestHistoryView>
                     fontSize: 16,
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _getStatusColor(request.status).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: _getStatusColor(request.status),
-                      width: 1,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _getStatusIcon(request.status),
-                      const SizedBox(width: 4),
-                      Text(
-                        _getStatusText(request.status),
+                Row(
+                  children: [
+                    // Request type badge
+                    Container(
+                      margin: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: request.requestType == 'check-in'
+                            ? Colors.blue.withOpacity(0.1)
+                            : Colors.purple.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: request.requestType == 'check-in' ? Colors.blue : Colors.purple,
+                          width: 1,
+                        ),
+                      ),
+                      child: Text(
+                        request.requestType == 'check-in' ? "Check-In" : "Check-Out",
                         style: TextStyle(
-                          color: _getStatusColor(request.status),
+                          color: request.requestType == 'check-in' ? Colors.blue : Colors.purple,
+                          fontSize: 12,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+
+                    // Status badge
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _getStatusColor(request.status).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: _getStatusColor(request.status),
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _getStatusIcon(request.status),
+                          const SizedBox(width: 4),
+                          Text(
+                            _getStatusText(request.status),
+                            style: TextStyle(
+                              color: _getStatusColor(request.status),
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -377,7 +452,7 @@ class _CheckOutRequestHistoryViewState extends State<CheckOutRequestHistoryView>
                 ),
               ),
 
-            // If approved, show check-out button
+            // If approved, show action button
             if (request.status == CheckOutRequestStatus.approved)
               Padding(
                 padding: const EdgeInsets.only(top: 16),
@@ -385,8 +460,12 @@ class _CheckOutRequestHistoryViewState extends State<CheckOutRequestHistoryView>
                   width: double.infinity,
                   child: ElevatedButton(
                     onPressed: () {
-                      // TODO: Handle check-out with approved request
-                      Navigator.pop(context, {'requestId': request.id, 'approved': true});
+                      // Return with the approved request info
+                      Navigator.pop(context, {
+                        'requestId': request.id,
+                        'approved': true,
+                        'requestType': request.requestType,
+                      });
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: accentColor,
@@ -395,7 +474,11 @@ class _CheckOutRequestHistoryViewState extends State<CheckOutRequestHistoryView>
                         borderRadius: BorderRadius.circular(8),
                       ),
                     ),
-                    child: const Text("Check Out Now"),
+                    child: Text(
+                        request.requestType == 'check-in'
+                            ? "Check In Now"
+                            : "Check Out Now"
+                    ),
                   ),
                 ),
               ),

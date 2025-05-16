@@ -1,4 +1,4 @@
-// lib/repositories/check_out_request_repository.dart
+// lib/repositories/check_out_request_repository.dart - Updated version
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:face_auth_compatible/model/check_out_request_model.dart';
@@ -29,26 +29,37 @@ class CheckOutRequestRepository {
     );
 
     if (tables.isEmpty) {
-      // Create the table
+      // Create the table with requestType column
       await db.execute('''
-        CREATE TABLE check_out_requests(
-          id TEXT PRIMARY KEY,
-          employee_id TEXT NOT NULL,
-          employee_name TEXT NOT NULL,
-          line_manager_id TEXT NOT NULL,
-          request_time TEXT NOT NULL,
-          latitude REAL NOT NULL,
-          longitude REAL NOT NULL,
-          location_name TEXT NOT NULL,
-          reason TEXT NOT NULL,
-          status TEXT NOT NULL,
-          response_time TEXT,
-          response_message TEXT,
-          is_synced INTEGER DEFAULT 0,
-          local_id TEXT
-        )
-      ''');
+      CREATE TABLE check_out_requests(
+        id TEXT PRIMARY KEY,
+        employee_id TEXT NOT NULL,
+        employee_name TEXT NOT NULL,
+        line_manager_id TEXT NOT NULL,
+        request_time TEXT NOT NULL,
+        latitude REAL NOT NULL,
+        longitude REAL NOT NULL,
+        location_name TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        status TEXT NOT NULL,
+        response_time TEXT,
+        response_message TEXT,
+        is_synced INTEGER DEFAULT 0,
+        local_id TEXT,
+        request_type TEXT DEFAULT 'check-out'
+      )
+    ''');
       print("Created check_out_requests table");
+    } else {
+      // Check if requestType column exists, add it if it doesn't
+      try {
+        await db.rawQuery("SELECT request_type FROM check_out_requests LIMIT 1");
+      } catch (e) {
+        // Column doesn't exist, add it
+        await db.execute(
+            "ALTER TABLE check_out_requests ADD COLUMN request_type TEXT DEFAULT 'check-out'");
+        print("Added request_type column to existing table");
+      }
     }
   }
 
@@ -67,9 +78,9 @@ class CheckOutRequestRepository {
         try {
           final docRef = await _firestore.collection('check_out_requests').add(request.toMap());
           remoteId = docRef.id;
-          print("Saved check-out request to Firestore with ID: $remoteId");
+          print("Saved request to Firestore with ID: $remoteId");
         } catch (e) {
-          print("Error saving check-out request to Firestore: $e");
+          print("Error saving request to Firestore: $e");
           // Continue with local storage even if Firestore fails
         }
       }
@@ -90,14 +101,15 @@ class CheckOutRequestRepository {
         'response_message': request.responseMessage,
         'is_synced': remoteId != null ? 1 : 0,
         'local_id': localId,
+        'request_type': request.requestType,
       };
 
       await _dbHelper.insert('check_out_requests', localData);
-      print("Saved check-out request locally with ID: ${remoteId ?? localId}");
+      print("Saved request locally with ID: ${remoteId ?? localId}");
 
       return true;
     } catch (e) {
-      print("Error creating check-out request: $e");
+      print("Error creating request: $e");
       return false;
     }
   }
@@ -158,6 +170,7 @@ class CheckOutRequestRepository {
               ? Timestamp.fromDate(DateTime.parse(map['response_time'] as String))
               : null,
           'responseMessage': map['response_message'],
+          'requestType': map['request_type'] ?? 'check-out', // Default for backward compatibility
         };
 
         return CheckOutRequest.fromMap(formattedMap, map['id'] as String);
@@ -223,6 +236,7 @@ class CheckOutRequestRepository {
               ? Timestamp.fromDate(DateTime.parse(map['response_time'] as String))
               : null,
           'responseMessage': map['response_message'],
+          'requestType': map['request_type'] ?? 'check-out', // Default for backward compatibility
         };
 
         return CheckOutRequest.fromMap(formattedMap, map['id'] as String);
@@ -304,6 +318,7 @@ class CheckOutRequestRepository {
         'response_time': request.responseTime?.toIso8601String(),
         'response_message': request.responseMessage,
         'is_synced': 1, // This came from Firestore, so it's synced
+        'request_type': request.requestType, // Save the request type
       };
 
       if (existingRequests.isEmpty) {
@@ -339,6 +354,84 @@ class CheckOutRequestRepository {
     }
   }
 
+  Future<List<CheckOutRequest>> getPendingRequestsForManagerWithType(
+      String lineManagerId, String requestType) async {
+    try {
+      await _ensureTableExists();
+      List<CheckOutRequest> requests = [];
+
+      // Check online first if possible
+      if (_connectivityService.currentStatus == ConnectionStatus.online) {
+        try {
+          final snapshot = await _firestore
+              .collection('check_out_requests')
+              .where('lineManagerId', isEqualTo: lineManagerId)
+              .where('status', isEqualTo: CheckOutRequestStatus.pending.toString().split('.').last)
+              .where('requestType', isEqualTo: requestType)
+              .orderBy('requestTime', descending: true)
+              .get();
+
+          requests = snapshot.docs.map((doc) {
+            return CheckOutRequest.fromMap(doc.data(), doc.id);
+          }).toList();
+
+          // Also cache these requests locally
+          for (var request in requests) {
+            await _saveRequestLocally(request);
+          }
+
+          return requests;
+        } catch (e) {
+          print("Error fetching requests from Firestore: $e");
+          // Fall back to local data
+        }
+      }
+
+      // Get from local storage
+      final localRequests = await _dbHelper.query(
+        'check_out_requests',
+        where: 'line_manager_id = ? AND status = ? AND request_type = ?',
+        whereArgs: [
+          lineManagerId,
+          CheckOutRequestStatus.pending.toString().split('.').last,
+          requestType
+        ],
+        orderBy: 'request_time DESC',
+      );
+
+      return _mapLocalRequestsToModels(localRequests);
+    } catch (e) {
+      print("Error getting pending requests with type: $e");
+      return [];
+    }
+  }
+
+// Helper method to map local SQLite records to CheckOutRequest models
+  List<CheckOutRequest> _mapLocalRequestsToModels(List<Map<String, dynamic>> localRequests) {
+    return localRequests.map((map) {
+      // Convert from SQLite format to our model
+      final formattedMap = {
+        'employeeId': map['employee_id'],
+        'employeeName': map['employee_name'],
+        'lineManagerId': map['line_manager_id'],
+        'requestTime': Timestamp.fromDate(DateTime.parse(map['request_time'] as String)),
+        'latitude': map['latitude'],
+        'longitude': map['longitude'],
+        'locationName': map['location_name'],
+        'reason': map['reason'],
+        'status': map['status'],
+        'responseTime': map['response_time'] != null
+            ? Timestamp.fromDate(DateTime.parse(map['response_time'] as String))
+            : null,
+        'responseMessage': map['response_message'],
+        'requestType': map['request_type'] ?? 'check-out', // Default for backward compatibility
+      };
+
+      return CheckOutRequest.fromMap(formattedMap, map['id'] as String);
+    }).toList();
+  }
+
+
   // Sync a specific request to Firestore
   Future<bool> syncRequest(Map<String, dynamic> localRequest) async {
     try {
@@ -361,6 +454,7 @@ class CheckOutRequestRepository {
             ? DateTime.parse(localRequest['response_time'])
             : null,
         'responseMessage': localRequest['response_message'],
+        'requestType': localRequest['request_type'] ?? 'check-out', // Default for backward compatibility
       };
 
       // Convert any DateTime objects to Timestamps

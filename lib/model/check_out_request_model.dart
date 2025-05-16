@@ -21,6 +21,7 @@ class CheckOutRequest {
   final CheckOutRequestStatus status;
   final DateTime? responseTime;
   final String? responseMessage;
+  final String requestType; // Added 'check-in' or 'check-out'
 
   CheckOutRequest({
     required this.id,
@@ -35,6 +36,7 @@ class CheckOutRequest {
     required this.status,
     this.responseTime,
     this.responseMessage,
+    required this.requestType, // Default to check-out for backward compatibility
   });
 
   factory CheckOutRequest.fromMap(Map<String, dynamic> map, String id) {
@@ -56,6 +58,7 @@ class CheckOutRequest {
           ? (map['responseTime'] as Timestamp).toDate()
           : null,
       responseMessage: map['responseMessage'],
+      requestType: map['requestType'] ?? 'check-out', // Default for backward compatibility
     );
   }
 
@@ -72,6 +75,7 @@ class CheckOutRequest {
       'status': status.toString().split('.').last,
       'responseTime': responseTime != null ? Timestamp.fromDate(responseTime!) : null,
       'responseMessage': responseMessage,
+      'requestType': requestType,
     };
   }
 
@@ -84,6 +88,7 @@ class CheckOutRequest {
     required double longitude,
     required String locationName,
     required String reason,
+    required String requestType, // Added parameter
   }) {
     return CheckOutRequest(
       id: '', // Will be set by Firestore
@@ -96,6 +101,7 @@ class CheckOutRequest {
       locationName: locationName,
       reason: reason,
       status: CheckOutRequestStatus.pending,
+      requestType: requestType,
     );
   }
 
@@ -117,6 +123,8 @@ class CheckOutRequest {
       status: status,
       responseTime: DateTime.now(),
       responseMessage: responseMessage ?? this.responseMessage,
+      requestType: this.requestType,
     );
   }
 }
+

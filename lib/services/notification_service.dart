@@ -1,4 +1,4 @@
-// lib/services/notification_service.dart
+// lib/services/notification_service.dart - Updated to handle both check-in and check-out
 
 import 'dart:async';
 import 'dart:convert';
@@ -103,7 +103,27 @@ class NotificationService {
 
     if (message.notification != null) {
       print('Message also contained a notification: ${message.notification}');
-      await _showLocalNotification(message);
+
+      // Determine the notification channel based on the request type
+      String channelId = 'general_notifications';
+      String channelName = 'General Notifications';
+      String channelDescription = 'General notifications channel';
+
+      // Check if it's a check-in/check-out related notification
+      if (message.data.containsKey('type')) {
+        final notificationType = message.data['type'];
+        final requestType = message.data['requestType'] ?? 'check-out'; // Default for backward compatibility
+
+        if (notificationType == 'check_out_request_update' ||
+            notificationType == 'new_check_out_request') {
+          // Use specific channel for check-in/check-out requests
+          channelId = 'check_requests_channel';
+          channelName = 'Check Requests';
+          channelDescription = 'Notifications about check-in and check-out approval requests';
+        }
+      }
+
+      await _showLocalNotification(message, channelId, channelName, channelDescription);
     }
   }
 
@@ -116,16 +136,21 @@ class NotificationService {
     }
   }
 
-  Future<void> _showLocalNotification(RemoteMessage message) async {
+  Future<void> _showLocalNotification(
+      RemoteMessage message,
+      String channelId,
+      String channelName,
+      String channelDescription
+      ) async {
     final notification = message.notification;
     final android = message.notification?.android;
 
     if (notification != null) {
-      const AndroidNotificationDetails androidPlatformChannelSpecifics =
+      final AndroidNotificationDetails androidPlatformChannelSpecifics =
       AndroidNotificationDetails(
-        'check_out_approvals_channel',
-        'Check-out Approvals',
-        channelDescription: 'Notifications about check-out approval requests',
+        channelId,
+        channelName,
+        channelDescription: channelDescription,
         importance: Importance.max,
         priority: Priority.high,
         showWhen: true,
@@ -138,7 +163,7 @@ class NotificationService {
         presentSound: true,
       );
 
-      const NotificationDetails platformChannelSpecifics = NotificationDetails(
+      final NotificationDetails platformChannelSpecifics = NotificationDetails(
         android: androidPlatformChannelSpecifics,
         iOS: iOSPlatformChannelSpecifics,
       );
