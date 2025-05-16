@@ -1,4 +1,4 @@
-// lib/dashboard/check_in_out_handler.dart
+// lib/dashboard/check_in_out_handler.dart - Updated version
 
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
@@ -20,13 +20,15 @@ class CheckInOutHandler {
     required bool isWithinGeofence,
     required Position? currentPosition,
     required VoidCallback onRegularAction,
-    required bool isCheckIn, // New parameter to distinguish between check-in and check-out
+    required bool isCheckIn, // Parameter to distinguish between check-in and check-out
   }) async {
     // If within geofence, proceed with normal action
     if (isWithinGeofence) {
       onRegularAction();
       return true;
     }
+
+    debugPrint("CheckInOutHandler: Outside geofence, handling as ${isCheckIn ? 'check-in' : 'check-out'} request");
 
     // If not within geofence, we need to handle it differently
     if (currentPosition == null) {
@@ -38,7 +40,7 @@ class CheckInOutHandler {
     final repository = getIt<CheckOutRequestRepository>();
     final requests = await repository.getRequestsForEmployee(employeeId);
 
-    // Filter for today's approved requests
+    // Filter for today's approved requests of the specific type (check-in or check-out)
     final today = DateTime.now();
     final approvedRequests = requests.where((req) =>
     req.status == CheckOutRequestStatus.approved &&
@@ -50,6 +52,7 @@ class CheckInOutHandler {
 
     if (approvedRequests.isNotEmpty) {
       // There's already an approved request, proceed with regular action
+      debugPrint("Found approved ${isCheckIn ? 'check-in' : 'check-out'} request - proceeding with regular action");
       onRegularAction();
       return true;
     }
@@ -65,11 +68,14 @@ class CheckInOutHandler {
 
     if (pendingRequests.isNotEmpty) {
       // Already has a pending request, show it
+      debugPrint("Found pending ${isCheckIn ? 'check-in' : 'check-out'} request - showing options");
       return await _showPendingRequestOptions(context, employeeId, isCheckIn);
     }
 
     // No approved or pending requests yet, get the manager ID and show the request form
     String? lineManagerId = await _getLineManagerId(employeeId);
+
+    debugPrint("Line manager ID for request: $lineManagerId");
 
     // Show request form (the lineManagerId will be found in the form if null here)
     return await _showCreateRequestForm(
@@ -85,12 +91,13 @@ class CheckInOutHandler {
   // Find line manager for the employee
   static Future<String?> _getLineManagerId(String employeeId) async {
     try {
+      debugPrint("Searching for line manager of employee: $employeeId");
       // First check cached manager info
       final prefs = await SharedPreferences.getInstance();
       String? cachedManagerId = prefs.getString('line_manager_id_$employeeId');
 
       if (cachedManagerId != null) {
-        print("Found cached manager ID: $cachedManagerId");
+        debugPrint("Found cached manager ID: $cachedManagerId");
         return cachedManagerId;
       }
 
@@ -110,13 +117,13 @@ class CheckInOutHandler {
           // Cache for next time
           await prefs.setString('line_manager_id_$employeeId', managerId);
 
-          print("Found manager ID in employee doc: $managerId");
+          debugPrint("Found manager ID in employee doc: $managerId");
           return managerId;
         }
       }
 
       // If not found in employee doc, check line_managers collection
-      print("Checking line_managers collection for employee: $employeeId");
+      debugPrint("Checking line_managers collection for employee: $employeeId");
 
       // Try different formats that might be used in the database
       final List<String> possibleEmployeeIds = [
@@ -126,7 +133,7 @@ class CheckInOutHandler {
       ];
 
       for (String empId in possibleEmployeeIds) {
-        print("Checking for team member: $empId");
+        debugPrint("Checking for team member: $empId");
         final lineManagerQuery = await FirebaseFirestore.instance
             .collection('line_managers')
             .where('teamMembers', arrayContains: empId)
@@ -140,15 +147,33 @@ class CheckInOutHandler {
           // Cache for next time
           await prefs.setString('line_manager_id_$employeeId', managerId);
 
-          print("Found manager ID in line_managers collection: $managerId");
+          debugPrint("Found manager ID in line_managers collection: $managerId");
           return managerId;
         }
       }
 
-      print("No manager found for employee: $employeeId");
+      // Try to find any manager if no specific one is found
+      debugPrint("No specific manager found - searching for any manager");
+      final managerQuery = await FirebaseFirestore.instance
+          .collection('employees')
+          .where('isManager', isEqualTo: true)
+          .limit(1)
+          .get();
+
+      if (managerQuery.docs.isNotEmpty) {
+        String fallbackManagerId = managerQuery.docs[0].id;
+        debugPrint("Using fallback manager ID: $fallbackManagerId");
+
+        // Cache for next time
+        await prefs.setString('line_manager_id_$employeeId', fallbackManagerId);
+
+        return fallbackManagerId;
+      }
+
+      debugPrint("No manager found for employee: $employeeId");
       return null;
     } catch (e) {
-      print("Error looking up manager: $e");
+      debugPrint("Error looking up manager: $e");
       return null;
     }
   }
@@ -218,6 +243,9 @@ class CheckInOutHandler {
       String? lineManagerId,
       bool isCheckIn,
       ) async {
+    debugPrint("Creating ${isCheckIn ? 'check-in' : 'check-out'} request form for $employeeId");
+    debugPrint("Line manager ID being passed: $lineManagerId");
+
     final result = await Navigator.push<bool>(
       context,
       MaterialPageRoute(

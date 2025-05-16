@@ -762,6 +762,8 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     return null;
   }
 
+  // Updates to the _handleCheckInOut method in dashboard_view.dart
+
   Future<void> _handleCheckInOut() async {
     // If already in authentication process, prevent multiple taps
     if (_isAuthenticating) {
@@ -772,15 +774,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     await _checkGeofenceStatus();
 
     if (!_isCheckedIn) {
-      // For check-in, verify if within geofence
-      if (!_isWithinGeofence) {
-        CustomSnackBar.errorSnackBar(
-            "You must be within the office premises to check in. " +
-                "You are currently ${_distanceToOffice != null ? '${_distanceToOffice!.toStringAsFixed(0)} meters' : 'too far'} away from ${_nearestLocation?.name ?? 'the office'}."
-        );
-        return;
-      }
-
+      // ===== CHECK-IN FLOW =====
       // Set authenticating flag
       setState(() {
         _isAuthenticating = true;
@@ -872,7 +866,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
         }
       });
     } else {
-      // CHECK-OUT FLOW
+      // ===== CHECK-OUT FLOW =====
       setState(() {
         _isAuthenticating = true;
       });

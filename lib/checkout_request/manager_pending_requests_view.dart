@@ -75,12 +75,16 @@ class _ManagerPendingRequestsViewState extends State<ManagerPendingRequestsView>
 
     try {
       final repository = getIt<CheckOutRequestRepository>();
+
+      // Get all pending requests for the manager, regardless of type
       final requests = await repository.getPendingRequestsForManager(widget.managerId);
 
       setState(() {
         _pendingRequests = requests;
         _isLoading = false;
       });
+
+      debugPrint("Loaded ${requests.length} pending requests: ${requests.map((req) => req.requestType).toList()}");
     } catch (e) {
       print("Error loading pending requests: $e");
       setState(() {
@@ -144,7 +148,7 @@ class _ManagerPendingRequestsViewState extends State<ManagerPendingRequestsView>
         return;
       }
 
-      // Format the request type for display
+      // Format the request type for display - ensuring proper capitalization
       String displayType = requestType == 'check-in' ? 'Check-In' : 'Check-Out';
 
       // Send notification via Firebase Cloud Function
@@ -166,7 +170,7 @@ class _ManagerPendingRequestsViewState extends State<ManagerPendingRequestsView>
         'sentAt': FieldValue.serverTimestamp(),
       });
 
-      print("Notification scheduled for employee $employeeId");
+      print("Notification scheduled for employee $employeeId for $requestType request");
     } catch (e) {
       print("Error sending notification: $e");
     }
