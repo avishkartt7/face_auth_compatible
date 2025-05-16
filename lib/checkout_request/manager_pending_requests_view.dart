@@ -1,5 +1,3 @@
-// lib/checkout_request/manager_pending_requests_view.dart - Complete Revised Implementation
-
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:face_auth_compatible/constants/theme.dart';
@@ -74,78 +72,25 @@ class _ManagerPendingRequestsViewState extends State<ManagerPendingRequestsView>
     });
 
     try {
-      final repository = getIt<CheckOutRequestRepository>();
+      debugPrint("MANAGER VIEW: Starting to load pending requests");
+      debugPrint("MANAGER VIEW: Manager ID: ${widget.managerId}");
 
-      // Improved debugging
-      debugPrint("MANAGER VIEW: Loading pending requests for manager ID: ${widget.managerId}");
-
-      // Add direct Firestore queries for debugging
-      debugPrint("DIRECT QUERY: Checking all check_out_requests");
-      final allRequests = await FirebaseFirestore.instance
-          .collection('check_out_requests')
-          .get();
-
-      debugPrint("DIRECT QUERY: Found ${allRequests.docs.length} total requests");
-
-      // Check specifically for pending requests
-      final allPendingRequests = await FirebaseFirestore.instance
-          .collection('check_out_requests')
-          .where('status', isEqualTo: 'pending')
-          .get();
-
-      debugPrint("DIRECT QUERY: Found ${allPendingRequests.docs.length} pending requests in total");
-
-      // Add additional formats to check for pending requests
+      // Prepare different formats to check for manager ID
       List<String> possibleManagerIds = [
         widget.managerId,
         widget.managerId.startsWith('EMP') ? widget.managerId.substring(3) : 'EMP${widget.managerId}',
       ];
 
-      List<CheckOutRequest> allRequests2 = [];
+      debugPrint("MANAGER VIEW: Checking manager IDs: $possibleManagerIds");
 
-      // Try to get actual manager format from Firebase first
-      try {
-        DocumentSnapshot managerDoc = await FirebaseFirestore.instance
-            .collection('employees')
-            .doc(widget.managerId)
-            .get();
+      List<CheckOutRequest> allRequests = [];
+      final repository = getIt<CheckOutRequestRepository>();
 
-        if (managerDoc.exists) {
-          debugPrint("MANAGER VIEW: Found manager in database: ${managerDoc.id}");
-        } else {
-          debugPrint("MANAGER VIEW: Manager not found with ID: ${widget.managerId}");
-
-          // Try alternative format
-          String altId = widget.managerId.startsWith('EMP')
-              ? widget.managerId.substring(3)
-              : 'EMP${widget.managerId}';
-
-          DocumentSnapshot altManagerDoc = await FirebaseFirestore.instance
-              .collection('employees')
-              .doc(altId)
-              .get();
-
-          if (altManagerDoc.exists) {
-            debugPrint("MANAGER VIEW: Found manager with alternative ID: $altId");
-          }
-        }
-      } catch (e) {
-        debugPrint("MANAGER VIEW: Error finding manager: $e");
-      }
-
-      // Try to fetch using different manager ID formats
+      // Try multiple formats for direct Firestore query first
       for (String managerId in possibleManagerIds) {
-        debugPrint("MANAGER VIEW: Trying to fetch requests with manager ID: $managerId");
+        debugPrint("MANAGER VIEW: Trying direct Firestore query for manager ID: $managerId");
 
         try {
-          // First try repository method
-          final requests = await repository.getPendingRequestsForManager(managerId);
-          if (requests.isNotEmpty) {
-            debugPrint("MANAGER VIEW: Found ${requests.length} pending requests with manager ID: $managerId using repository");
-            allRequests2.addAll(requests);
-          }
-
-          // Then try direct Firestore query
           final snapshot = await FirebaseFirestore.instance
               .collection('check_out_requests')
               .where('lineManagerId', isEqualTo: managerId)
@@ -154,65 +99,80 @@ class _ManagerPendingRequestsViewState extends State<ManagerPendingRequestsView>
 
           debugPrint("MANAGER VIEW: Direct query found ${snapshot.docs.length} requests for $managerId");
 
-          // Convert to request objects
           for (var doc in snapshot.docs) {
             try {
               CheckOutRequest request = CheckOutRequest.fromMap(doc.data(), doc.id);
-              allRequests2.add(request);
-              debugPrint("MANAGER VIEW: Added request ${doc.id} from ${request.employeeName}");
+              allRequests.add(request);
+              debugPrint("MANAGER VIEW: Added request ${doc.id} from direct query");
             } catch (e) {
-              debugPrint("MANAGER VIEW: Error parsing request ${doc.id}: $e");
+              debugPrint("MANAGER VIEW: Error parsing request from direct query: $e");
             }
           }
         } catch (e) {
-          debugPrint("MANAGER VIEW: Error fetching requests for manager $managerId: $e");
+          debugPrint("MANAGER VIEW: Error in direct Firestore query for $managerId: $e");
         }
       }
 
-      // Try direct query for specific document ID if known
+      // Now try repository method for each manager ID format
+      for (String managerId in possibleManagerIds) {
+        debugPrint("MANAGER VIEW: Trying repository method for manager ID: $managerId");
+
+        try {
+          final requests = await repository.getPendingRequestsForManager(managerId);
+
+          if (requests.isNotEmpty) {
+            debugPrint("MANAGER VIEW: Repository found ${requests.length} requests for $managerId");
+            allRequests.addAll(requests);
+          }
+        } catch (e) {
+          debugPrint("MANAGER VIEW: Error using repository for $managerId: $e");
+        }
+      }
+
+      // Check all pending requests in the database to make sure we're not missing anything
       try {
-        final knownRequestIds = allPendingRequests.docs.map((doc) => doc.id).toList();
-        debugPrint("MANAGER VIEW: Known request IDs: $knownRequestIds");
+        debugPrint("MANAGER VIEW: Checking all pending requests in the database");
+        final allPendingRequests = await FirebaseFirestore.instance
+            .collection('check_out_requests')
+            .where('status', isEqualTo: 'pending')
+            .get();
 
-        for (String id in knownRequestIds) {
-          final doc = await FirebaseFirestore.instance
-              .collection('check_out_requests')
-              .doc(id)
-              .get();
+        debugPrint("MANAGER VIEW: Total pending requests in database: ${allPendingRequests.docs.length}");
 
-          if (doc.exists) {
-            debugPrint("MANAGER VIEW: Direct fetch of document $id:");
-            debugPrint("  lineManagerId: ${doc.data()?['lineManagerId']}");
-            debugPrint("  status: ${doc.data()?['status']}");
-            debugPrint("  employeeName: ${doc.data()?['employeeName']}");
+        // Look for any that might belong to this manager but were missed
+        for (var doc in allPendingRequests.docs) {
+          String docLineManagerId = doc.data()['lineManagerId'] ?? '';
+          bool belongsToThisManager = possibleManagerIds.contains(docLineManagerId);
+
+          if (belongsToThisManager) {
+            try {
+              CheckOutRequest request = CheckOutRequest.fromMap(doc.data(), doc.id);
+              allRequests.add(request);
+              debugPrint("MANAGER VIEW: Found additional request ${doc.id} for manager");
+            } catch (e) {
+              debugPrint("MANAGER VIEW: Error parsing additional request: $e");
+            }
           }
         }
       } catch (e) {
-        debugPrint("MANAGER VIEW: Error fetching specific documents: $e");
+        debugPrint("MANAGER VIEW: Error checking all pending requests: $e");
       }
 
       // Remove duplicates by ID
       final uniqueRequests = <String, CheckOutRequest>{};
-      for (var request in allRequests2) {
+      for (var request in allRequests) {
         uniqueRequests[request.id] = request;
       }
 
-      // Final list of unique requests
       final finalRequests = uniqueRequests.values.toList();
+      debugPrint("MANAGER VIEW: Total unique requests found: ${finalRequests.length}");
 
       setState(() {
         _pendingRequests = finalRequests;
         _isLoading = false;
       });
 
-      debugPrint("MANAGER VIEW: Loaded ${finalRequests.length} unique pending requests");
-
-      // Log the full data for debugging
-      for (var request in finalRequests) {
-        debugPrint("Request ID: ${request.id}, From: ${request.employeeName}, Type: ${request.requestType}, Status: ${request.status}");
-      }
-
-      // If we think we have data but UI isn't updating, force a rebuild
+      // Force UI update if we got results
       if (_pendingRequests.isNotEmpty) {
         Future.delayed(Duration.zero, () {
           if (mounted) setState(() {});
@@ -371,7 +331,23 @@ class _ManagerPendingRequestsViewState extends State<ManagerPendingRequestsView>
           .get();
 
       if (!doc.exists) {
-        debugPrint("No FCM token found for employee $employeeId");
+        // Try alternative format (with/without EMP prefix)
+        String altId = employeeId.startsWith('EMP')
+            ? employeeId.substring(3)
+            : 'EMP$employeeId';
+
+        final altDoc = await FirebaseFirestore.instance
+            .collection('fcm_tokens')
+            .doc(altId)
+            .get();
+
+        if (altDoc.exists && altDoc.data()?['token'] != null) {
+          String token = altDoc.data()!['token'];
+          await _sendNotificationWithToken(altId, token, isApproved, message, requestType);
+          return;
+        }
+
+        debugPrint("No FCM token found for employee $employeeId or alt format");
         return;
       }
 
@@ -381,6 +357,15 @@ class _ManagerPendingRequestsViewState extends State<ManagerPendingRequestsView>
         return;
       }
 
+      await _sendNotificationWithToken(employeeId, token, isApproved, message, requestType);
+    } catch (e) {
+      debugPrint("Error sending notification: $e");
+    }
+  }
+
+  Future<void> _sendNotificationWithToken(
+      String employeeId, String token, bool isApproved, String? message, String requestType) async {
+    try {
       // Format the request type for display - ensuring proper capitalization
       String displayType = requestType == 'check-in' ? 'Check-In' : 'Check-Out';
 
@@ -392,20 +377,41 @@ class _ManagerPendingRequestsViewState extends State<ManagerPendingRequestsView>
             : '$displayType Request Rejected',
         'body': isApproved
             ? 'Your request to ${requestType.replaceAll('-', ' ')} has been approved'
-            : 'Your request to ${requestType.replaceAll('-', ' ')} has been rejected',
+            : 'Your request to ${requestType.replaceAll('-', ' ')} has been rejected${message != null && message.isNotEmpty ? ": $message" : ""}',
         'data': {
           'type': 'check_out_request_response',
           'employeeId': employeeId,
           'approved': isApproved,
           'message': message ?? '',
           'requestType': requestType,
+          'click_action': 'FLUTTER_NOTIFICATION_CLICK',
+        },
+        'sentAt': FieldValue.serverTimestamp(),
+      });
+
+      // Also send directly to the employee topic for better delivery chances
+      await FirebaseFirestore.instance.collection('notifications').add({
+        'topic': 'employee_$employeeId',
+        'title': isApproved
+            ? '$displayType Request Approved'
+            : '$displayType Request Rejected',
+        'body': isApproved
+            ? 'Your request to ${requestType.replaceAll('-', ' ')} has been approved'
+            : 'Your request to ${requestType.replaceAll('-', ' ')} has been rejected${message != null && message.isNotEmpty ? ": $message" : ""}',
+        'data': {
+          'type': 'check_out_request_response',
+          'employeeId': employeeId,
+          'approved': isApproved,
+          'message': message ?? '',
+          'requestType': requestType,
+          'click_action': 'FLUTTER_NOTIFICATION_CLICK',
         },
         'sentAt': FieldValue.serverTimestamp(),
       });
 
       debugPrint("Notification scheduled for employee $employeeId for $requestType request");
     } catch (e) {
-      debugPrint("Error sending notification: $e");
+      debugPrint("Error sending notification with token: $e");
     }
   }
 
@@ -517,14 +523,14 @@ class _ManagerPendingRequestsViewState extends State<ManagerPendingRequestsView>
         child: _isLoading
             ? const Center(child: CircularProgressIndicator(color: accentColor))
             : filteredRequests.isEmpty
-            ? _buildEmptyState()
-            : ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: filteredRequests.length,
-          itemBuilder: (context, index) {
-            return _buildRequestCard(filteredRequests[index]);
-          },
-        ),
+                ? _buildEmptyState()
+                : ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: filteredRequests.length,
+                    itemBuilder: (context, index) {
+                      return _buildRequestCard(filteredRequests[index]);
+                    },
+                  ),
       ),
     );
   }
@@ -597,6 +603,17 @@ class _ManagerPendingRequestsViewState extends State<ManagerPendingRequestsView>
                   ),
                 ),
               ],
+            ),
+          ),
+          // Add refresh button
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: _loadPendingRequests,
+            icon: const Icon(Icons.refresh),
+            label: const Text("Refresh"),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: accentColor,
+              foregroundColor: Colors.white,
             ),
           ),
         ],

@@ -1,10 +1,9 @@
-// Complete implementation of lib/repositories/check_out_request_repository.dart
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:face_auth_compatible/model/check_out_request_model.dart';
 import 'package:face_auth_compatible/services/database_helper.dart';
 import 'package:face_auth_compatible/services/connectivity_service.dart';
 import 'package:flutter/foundation.dart'; // Add for debugPrint
+import 'package:cloud_functions/cloud_functions.dart'; // Added missing import
 
 class CheckOutRequestRepository {
   final DatabaseHelper _dbHelper;
@@ -592,84 +591,168 @@ class CheckOutRequestRepository {
       // Format the request type for display - ensuring proper capitalization
       String displayType = request.requestType == 'check-in' ? 'Check-In' : 'Check-Out';
 
-      // Try to find the manager's FCM token directly
-      final tokenDoc = await _firestore
-          .collection('fcm_tokens')
-          .doc(request.lineManagerId)
-          .get();
+      debugPrint("REPO: Sending notification to manager ${request.lineManagerId} for ${request.requestType} request");
 
-      if (!tokenDoc.exists) {
-        // Try alternative ID format
-        final altId = request.lineManagerId.startsWith('EMP')
+      // Try multiple methods for reliability
+
+      // 1. First try topic-based notifications for all formats of manager ID
+      List<String> managerTopics = [
+        'manager_${request.lineManagerId}',
+        request.lineManagerId.startsWith('EMP')
+            ? 'manager_${request.lineManagerId.substring(3)}'
+            : 'manager_EMP${request.lineManagerId}',
+        'all_managers'
+      ];
+
+      // Send to each topic
+      for (String topic in managerTopics) {
+        try {
+          await _firestore.collection('notifications').add({
+            'topic': topic,
+            'title': 'New $displayType Request',
+            'body': '${request.employeeName} has requested to ${request.requestType.replaceAll('-', ' ')} from an offsite location.',
+            'data': {
+              'type': 'new_check_out_request',
+              'requestId': request.id,
+              'employeeId': request.employeeId,
+              'employeeName': request.employeeName,
+              'locationName': request.locationName,
+              'requestType': request.requestType,
+              'click_action': 'FLUTTER_NOTIFICATION_CLICK',
+            },
+            'android': {
+              'priority': 'high',
+              'notification': {
+                'sound': 'default',
+                'priority': 'high',
+                'channel_id': 'check_requests_channel'
+              }
+            },
+            'apns': {
+              'payload': {
+                'aps': {
+                  'sound': 'default',
+                  'badge': 1,
+                  'content_available': true,
+                  'interruption_level': 'time-sensitive'
+                }
+              }
+            },
+            'sentAt': FieldValue.serverTimestamp(),
+          });
+
+          debugPrint("REPO: Sent notification to topic: $topic");
+        } catch (e) {
+          debugPrint("REPO: Error sending topic notification to $topic: $e");
+        }
+      }
+
+      // 2. Try to find the manager's FCM token directly (both formats)
+      List<String> managerIds = [
+        request.lineManagerId,
+        request.lineManagerId.startsWith('EMP')
             ? request.lineManagerId.substring(3)
-            : 'EMP${request.lineManagerId}';
+            : 'EMP${request.lineManagerId}'
+      ];
 
-        final altTokenDoc = await _firestore
-            .collection('fcm_tokens')
-            .doc(altId)
-            .get();
+      for (String managerId in managerIds) {
+        try {
+          final tokenDoc = await _firestore
+              .collection('fcm_tokens')
+              .doc(managerId)
+              .get();
 
-        if (!altTokenDoc.exists) {
-          debugPrint("REPO: No FCM token found for manager ${request.lineManagerId} or $altId");
-          return;
+          if (tokenDoc.exists) {
+            String? token = tokenDoc.data()?['token'];
+            if (token != null) {
+              // Send direct notification with token
+              await _firestore.collection('notifications').add({
+                'token': token,
+                'title': 'New $displayType Request',
+                'body': '${request.employeeName} has requested to ${request.requestType.replaceAll('-', ' ')} from an offsite location.',
+                'data': {
+                  'type': 'new_check_out_request',
+                  'requestId': request.id,
+                  'employeeId': request.employeeId,
+                  'employeeName': request.employeeName,
+                  'locationName': request.locationName,
+                  'requestType': request.requestType,
+                  'click_action': 'FLUTTER_NOTIFICATION_CLICK',
+                  'fromNotificationTap': 'true',
+                },
+                'android': {
+                  'priority': 'high',
+                  'notification': {
+                    'sound': 'default',
+                    'priority': 'high',
+                    'channel_id': 'check_requests_channel'
+                  }
+                },
+                'apns': {
+                  'payload': {
+                    'aps': {
+                      'sound': 'default',
+                      'badge': 1,
+                      'content_available': true,
+                      'interruption_level': 'time-sensitive'
+                    }
+                  }
+                },
+                'sentAt': FieldValue.serverTimestamp(),
+              });
+
+              debugPrint("REPO: Sent direct notification to manager $managerId with token");
+            }
+          }
+        } catch (e) {
+          debugPrint("REPO: Error sending direct notification to manager $managerId: $e");
         }
+      }
 
-        // Got token with alternative ID
-        String? token = altTokenDoc.data()?['token'];
-        if (token == null) {
-          debugPrint("REPO: FCM token is null for manager $altId");
-          return;
-        }
+      // 3. Try Cloud Function as a fallback
+      try {
+        // Use the Cloud Functions API - this part was causing errors
+        final callable = FirebaseFunctions.instance.httpsCallable(
+          'sendManagerNotification',
+        );
 
-        // Send direct notification with alt ID
-        await _firestore.collection('notifications').add({
-          'token': token,
+        await callable.call({
+          'managerId': request.lineManagerId,
+          'employeeName': request.employeeName,
+          'requestId': request.id,
+          'requestType': request.requestType,
+        });
+
+        debugPrint("REPO: Notification sent via Cloud Function");
+      } catch (e) {
+        debugPrint("REPO: Error sending notification via Cloud Function: $e");
+      }
+
+      debugPrint("REPO: All notification methods attempted for manager ${request.lineManagerId}");
+
+      // 4. Add a notification record to a dedicated collection for reliability
+      try {
+        await _firestore.collection('pending_notifications').add({
+          'targetId': request.lineManagerId,
           'title': 'New $displayType Request',
           'body': '${request.employeeName} has requested to ${request.requestType.replaceAll('-', ' ')} from an offsite location.',
           'data': {
             'type': 'new_check_out_request',
+            'requestId': request.id,
             'employeeId': request.employeeId,
             'employeeName': request.employeeName,
             'locationName': request.locationName,
             'requestType': request.requestType,
-            'managerId': altId,
-            'click_action': 'FLUTTER_NOTIFICATION_CLICK',
           },
-          'sentAt': FieldValue.serverTimestamp(),
+          'sent': false,
+          'createdAt': FieldValue.serverTimestamp(),
+          'retryCount': 0,
         });
-
-        debugPrint("REPO: Direct notification scheduled for manager $altId");
-        return;
+      } catch (e) {
+        debugPrint("REPO: Error creating pending notification record: $e");
       }
-
-      // Got token with original ID
-      String? token = tokenDoc.data()?['token'];
-      if (token == null) {
-        debugPrint("REPO: FCM token is null for manager ${request.lineManagerId}");
-        return;
-      }
-
-      // Send direct notification with original ID
-      await _firestore.collection('notifications').add({
-        'token': token,
-        'title': 'New $displayType Request',
-        'body': '${request.employeeName} has requested to ${request.requestType.replaceAll('-', ' ')} from an offsite location.',
-        'data': {
-          'type': 'new_check_out_request',
-          'employeeId': request.employeeId,
-          'employeeName': request.employeeName,
-          'locationName': request.locationName,
-          'requestType': request.requestType,
-          'managerId': request.lineManagerId,
-          'click_action': 'FLUTTER_NOTIFICATION_CLICK',
-        },
-        'sentAt': FieldValue.serverTimestamp(),
-      });
-
-      debugPrint("REPO: Direct notification scheduled for manager ${request.lineManagerId}");
-
     } catch (e) {
-      debugPrint("REPO: Error sending direct manager notification: $e");
+      debugPrint("REPO: Error in send notification process: $e");
     }
   }
 }

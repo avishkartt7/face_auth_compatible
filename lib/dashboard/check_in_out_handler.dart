@@ -1,4 +1,3 @@
-// lib/dashboard/check_in_out_handler.dart - Updated version
 
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
@@ -47,29 +46,50 @@ class CheckInOutHandler {
 
     // Filter for today's approved requests of the specific type (check-in or check-out)
     final today = DateTime.now();
-    final approvedRequests = requests.where((req) =>
-        req.status == CheckOutRequestStatus.approved &&
-        req.requestTime.year == today.year &&
-        req.requestTime.month == today.month &&
-        req.requestTime.day == today.day &&
-        req.requestType == (isCheckIn ? 'check-in' : 'check-out')
-    ).toList();
+
+    // FIXED: Improved request filtering logic with better date comparison
+    final approvedRequests = requests.where((req) {
+      bool isCorrectType = req.requestType == (isCheckIn ? 'check-in' : 'check-out');
+      bool isApproved = req.status == CheckOutRequestStatus.approved;
+
+      // Ensure we're checking the date portion only without time
+      bool isSameDay = req.requestTime.year == today.year &&
+                       req.requestTime.month == today.month &&
+                       req.requestTime.day == today.day;
+
+      // Check request validity - approve requests are valid for one hour
+      bool isStillValid = true;
+      if (req.responseTime != null) {
+        final approvalTime = req.responseTime!;
+        final validUntil = approvalTime.add(const Duration(hours: 1));
+        isStillValid = today.isBefore(validUntil);
+
+        if (isApproved && isCorrectType && isSameDay) {
+          debugPrint("Found approved ${isCheckIn ? 'check-in' : 'check-out'} request: valid until ${validUntil.toString()}");
+          debugPrint("Current time: ${today.toString()}, Still valid: $isStillValid");
+        }
+      }
+
+      return isApproved && isCorrectType && isSameDay && isStillValid;
+    }).toList();
 
     if (approvedRequests.isNotEmpty) {
-      // There's already an approved request, proceed with regular action
+      // There's already an approved and valid request, proceed with regular action
       debugPrint("Found approved ${isCheckIn ? 'check-in' : 'check-out'} request - proceeding with regular action");
       onRegularAction();
       return true;
     }
 
     // Check for pending requests today for this action type
-    final pendingRequests = requests.where((req) =>
-        req.status == CheckOutRequestStatus.pending &&
-        req.requestTime.year == today.year &&
-        req.requestTime.month == today.month &&
-        req.requestTime.day == today.day &&
-        req.requestType == (isCheckIn ? 'check-in' : 'check-out')
-    ).toList();
+    final pendingRequests = requests.where((req) {
+      bool isCorrectType = req.requestType == (isCheckIn ? 'check-in' : 'check-out');
+      bool isPending = req.status == CheckOutRequestStatus.pending;
+      bool isSameDay = req.requestTime.year == today.year &&
+                       req.requestTime.month == today.month &&
+                       req.requestTime.day == today.day;
+
+      return isPending && isCorrectType && isSameDay;
+    }).toList();
 
     debugPrint("CheckInOutHandler: Found ${pendingRequests.length} pending ${isCheckIn ? 'check-in' : 'check-out'} requests for today");
 
