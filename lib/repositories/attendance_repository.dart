@@ -31,11 +31,22 @@ class AttendanceRepository {
     String? imageData,
   }) async {
     try {
-      // Format today's date as YYYY-MM-DD for the document ID
       String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
       print("AttendanceRepository: Recording check-in for $employeeId on $today");
 
-      // Prepare data for both online and offline storage
+      // First, clear any existing records for today (to handle duplicates)
+      try {
+        await _dbHelper.delete(
+          'attendance',
+          where: 'employee_id = ? AND date = ?',
+          whereArgs: [employeeId, today],
+        );
+        print("AttendanceRepository: Cleared any existing records for today");
+      } catch (deleteError) {
+        print("AttendanceRepository: Error clearing existing records: $deleteError");
+      }
+
+      // Prepare check-in data
       Map<String, dynamic> checkInData = {
         'date': today,
         'checkIn': checkInTime.toIso8601String(),
@@ -55,10 +66,15 @@ class AttendanceRepository {
         date: today,
         checkIn: checkInTime.toIso8601String(),
         locationId: locationId,
+        isSynced: false,
         rawData: checkInData,
       );
 
-      // If online, try to save to Firestore first
+      // Save to local database
+      int localId = await _dbHelper.insert('attendance', localRecord.toMap());
+      print("AttendanceRepository: Check-in saved locally with ID: $localId");
+
+      // If online, try to save to Firestore
       if (_connectivityService.currentStatus == ConnectionStatus.online) {
         try {
           await _firestore
@@ -71,26 +87,20 @@ class AttendanceRepository {
             'checkIn': Timestamp.fromDate(checkInTime),
           }, SetOptions(merge: true));
 
-          // Mark as synced in local storage
-          localRecord = LocalAttendanceRecord(
-            employeeId: employeeId,
-            date: today,
-            checkIn: checkInTime.toIso8601String(),
-            locationId: locationId,
-            isSynced: true,
-            rawData: checkInData,
+          // Mark as synced
+          await _dbHelper.update(
+            'attendance',
+            {'is_synced': 1},
+            where: 'id = ?',
+            whereArgs: [localId],
           );
 
-          print("AttendanceRepository: Check-in saved to Firestore");
+          print("AttendanceRepository: Check-in saved to Firestore and marked as synced");
         } catch (e) {
           print("AttendanceRepository: Error saving to Firestore: $e");
-          // Continue with local save even if Firestore fails
+          // Continue - local save was successful
         }
       }
-
-      // Always save to local database regardless of online status
-      await _dbHelper.insert('attendance', localRecord.toMap());
-      print("AttendanceRepository: Check-in saved locally");
 
       return true;
     } catch (e) {
@@ -205,11 +215,12 @@ class AttendanceRepository {
   }
 
   // Get today's attendance record
+  // Get today's attendance record
   Future<LocalAttendanceRecord?> getTodaysAttendance(String employeeId) async {
     String today = DateFormat('yyyy-MM-dd').format(DateTime.now());
 
     try {
-      // First check local database
+      // Always check local database first
       List<Map<String, dynamic>> records = await _dbHelper.query(
         'attendance',
         where: 'employee_id = ? AND date = ?',

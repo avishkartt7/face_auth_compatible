@@ -13,6 +13,11 @@ import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:face_auth_compatible/services/service_locator.dart';
 
+
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
 // Import the new services for offline functionality
 import 'package:face_auth_compatible/services/sync_service.dart';
 import 'package:face_auth_compatible/services/connectivity_service.dart';
@@ -24,9 +29,42 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  // You need to initialize Firebase before using Firebase Messaging
+  await Firebase.initializeApp();
+  print("Handling a background message: ${message.messageId}");
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+
+  // Set the background messaging handler
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+  // Initialize local notifications
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+  FlutterLocalNotificationsPlugin();
+
+  const AndroidInitializationSettings initializationSettingsAndroid =
+  AndroidInitializationSettings('@mipmap/ic_launcher');
+
+  const DarwinInitializationSettings initializationSettingsIOS =
+  DarwinInitializationSettings(
+    requestAlertPermission: true,
+    requestBadgePermission: true,
+    requestSoundPermission: true,
+  );
+
+  const InitializationSettings initializationSettings = InitializationSettings(
+    android: initializationSettingsAndroid,
+    iOS: initializationSettingsIOS,
+  );
+
+  await flutterLocalNotificationsPlugin.initialize(
+    initializationSettings,
+  );
 
   // Initialize Firestore for offline persistence
   await _initializeFirestoreOfflineMode();
@@ -42,7 +80,6 @@ void main() async {
 
   // Initialize sync service after service locator is setup
   final syncService = getIt<SyncService>();
-  // The sync service will initialize itself in the constructor
   print("Main: Sync service initialized");
 
   runApp(const MyApp());

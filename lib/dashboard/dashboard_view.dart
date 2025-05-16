@@ -16,6 +16,11 @@ import 'package:geolocator/geolocator.dart';
 import 'package:face_auth_compatible/model/location_model.dart';
 // Add this import at the top of dashboard_view.dart
 import 'package:face_auth_compatible/dashboard/team_management_view.dart';
+import 'package:face_auth_compatible/dashboard/checkout_handler.dart';
+import 'package:face_auth_compatible/checkout_request/manager_pending_requests_view.dart';
+import 'package:face_auth_compatible/checkout_request/request_history_view.dart';
+import 'package:face_auth_compatible/repositories/check_out_request_repository.dart';
+import 'package:face_auth_compatible/services/notification_service.dart';
 
 // New imports for offline functionality
 import 'package:face_auth_compatible/services/connectivity_service.dart';
@@ -50,6 +55,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   bool _isLineManager = false;
   String? _lineManagerDocumentId; // Add this line
   Map<String, dynamic>? _lineManagerData;
+  int _pendingApprovalRequests = 0;
 
   // Geofencing related variables
   bool _isCheckingLocation = false;
@@ -74,6 +80,9 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     super.initState();
     _loadDarkModePreference();
 
+    final notificationService = getIt<NotificationService>();
+    notificationService.notificationStream.listen(_handleNotification);
+
     // Get instances from service locator
     _connectivityService = getIt<ConnectivityService>();
     _attendanceRepository = getIt<AttendanceRepository>();
@@ -85,8 +94,11 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       debugPrint("Connectivity status changed: $status");
       if (status == ConnectionStatus.online && _needsSync) {
         _syncService.syncData().then((_) {
-          // Refresh data after sync
+          // Refresh data after syncHO
           _fetchUserData();
+          if (_isLineManager) {
+            _loadPendingApprovalRequests();
+          }
           _fetchAttendanceStatus();
           _fetchRecentActivity();
           setState(() {
@@ -123,6 +135,53 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     _tabController.dispose();
     _syncService.dispose();
     super.dispose();
+  }
+
+  void _handleNotification(Map<String, dynamic> data) {
+    // Handle different notification types
+    final notificationType = data['type'];
+
+    if (notificationType == 'check_out_request_update') {
+      // Refresh request history if it's a check-out request update
+      if (_isLineManager) {
+        _loadPendingApprovalRequests();
+      }
+
+      // Show snackbar about request status
+      final bool isApproved = data['status'] == 'approved';
+      CustomSnackBar.successSnackBar(
+          isApproved
+              ? "Your check-out request has been approved"
+              : "Your check-out request has been rejected"
+      );
+    } else if (notificationType == 'new_check_out_request') {
+      // Refresh pending requests if it's a new request and user is a manager
+      if (_isLineManager) {
+        _loadPendingApprovalRequests();
+
+        // Show snackbar about new request
+        final String employeeName = data['employeeName'] ?? 'An employee';
+        CustomSnackBar.successSnackBar(
+            "$employeeName has requested to check out from an offsite location"
+        );
+      }
+    }
+  }
+
+
+  Future<void> _loadPendingApprovalRequests() async {
+    if (!_isLineManager) return;
+
+    try {
+      final repository = getIt<CheckOutRequestRepository>();
+      final requests = await repository.getPendingRequestsForManager(widget.employeeId);
+
+      setState(() {
+        _pendingApprovalRequests = requests.length;
+      });
+    } catch (e) {
+      debugPrint('Error loading pending approval requests: $e');
+    }
   }
 
 
@@ -801,12 +860,15 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
         }
       });
     } else {
-      // For check-out, still require face authentication for security
-      // For check-out, still require face authentication for security
+      // CHECK-OUT LOGIC (UPDATED FOR GEOFENCE CHECKING)
       setState(() {
         _isAuthenticating = true;
       });
 
+      // Get current position
+      Position? currentPosition = await GeofenceUtil.getCurrentPosition();
+
+      // First, use the face authentication
       showDialog(
         context: context,
         barrierDismissible: false,
@@ -840,32 +902,42 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                         return;
                       }
 
-                      // If authentication successful, proceed with check-out using repository
-                      bool checkOutSuccess = await _attendanceRepository.recordCheckOut(
+                      // If face auth successful, handle check-out with geofence check
+                      await CheckoutHandler.handleCheckOut(
+                        context: context,
                         employeeId: widget.employeeId,
-                        checkOutTime: DateTime.now(),
-                      );
+                        employeeName: _userData?['name'] ?? 'Employee',
+                        isWithinGeofence: _isWithinGeofence,
+                        currentPosition: currentPosition,
+                        onRegularCheckOut: () async {
+                          // Proceed with regular check-out process
+                          bool checkOutSuccess = await _attendanceRepository.recordCheckOut(
+                            employeeId: widget.employeeId,
+                            checkOutTime: DateTime.now(),
+                          );
 
-                      if (checkOutSuccess) {
-                        // Update state to reflect check-out
-                        setState(() {
-                          _isCheckedIn = false;
-                          _checkInTime = null;
+                          if (checkOutSuccess) {
+                            // Update state to reflect check-out
+                            setState(() {
+                              _isCheckedIn = false;
+                              _checkInTime = null;
 
-                          // If offline, mark that we need to sync later
-                          if (_connectivityService.currentStatus == ConnectionStatus.offline) {
-                            _needsSync = true;
+                              // If offline, mark that we need to sync later
+                              if (_connectivityService.currentStatus == ConnectionStatus.offline) {
+                                _needsSync = true;
+                              }
+                            });
+
+                            CustomSnackBar.successSnackBar("Checked out successfully at $_currentTime");
+
+                            // Refresh activity list and attendance status
+                            await _fetchAttendanceStatus();
+                            await _fetchRecentActivity();
+                          } else {
+                            CustomSnackBar.errorSnackBar("Failed to record check-out. Please try again.");
                           }
-                        });
-
-                        CustomSnackBar.successSnackBar("Checked out successfully at $_currentTime");
-
-                        // Refresh activity list and attendance status
-                        await _fetchAttendanceStatus();
-                        await _fetchRecentActivity();
-                      } else {
-                        CustomSnackBar.errorSnackBar("Failed to record check-out. Please try again.");
-                      }
+                        },
+                      );
                     } else {
                       // If authentication failed, show error message
                       CustomSnackBar.errorSnackBar("Face authentication failed. Check-out canceled.");
@@ -899,7 +971,11 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       final pendingRecords = await _attendanceRepository.getPendingRecords();
       setState(() {
         _needsSync = pendingRecords.isNotEmpty;
+
       });
+    }
+    if (_isLineManager) {
+      await _loadPendingApprovalRequests();
     }
   }
 
@@ -1807,8 +1883,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
             },
           ),
 
-          // Line Manager Menu Option
-          if (_isLineManager)
+          if (_isLineManager) ...[
             _buildMenuOption(
               icon: Icons.people_outline,
               title: 'My Team',
@@ -1850,6 +1925,31 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                 debugPrint("=========================");
               },
             ),
+
+            // Add the pending approval requests option with a badge
+            _buildMenuOption(
+              icon: Icons.approval,
+              title: 'Pending Approval Requests',
+              subtitle: _pendingApprovalRequests > 0
+                  ? '$_pendingApprovalRequests requests waiting for your approval'
+                  : 'No pending requests',
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => ManagerPendingRequestsView(
+                      managerId: widget.employeeId,
+                    ),
+                  ),
+                ).then((_) {
+                  // Refresh the pending count when returning
+                  _loadPendingApprovalRequests();
+                });
+              },
+              showStatusIcon: _pendingApprovalRequests > 0,
+              statusIcon: Icons.notifications_active,
+              statusColor: Colors.orange,
+            ),
+          ],
 
 
           // Debug menu option when not a line manager
@@ -1975,6 +2075,21 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
             title: 'Settings',
             onTap: () {
               _showComingSoonDialog('Settings');
+            },
+          ),
+
+          _buildMenuOption(
+            icon: Icons.history,
+            title: 'Check-Out Request History',
+            subtitle: 'View your remote check-out requests',
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => CheckOutRequestHistoryView(
+                    employeeId: widget.employeeId,
+                  ),
+                ),
+              );
             },
           ),
 
