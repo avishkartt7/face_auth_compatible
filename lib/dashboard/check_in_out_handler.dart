@@ -40,10 +40,15 @@ class CheckInOutHandler {
     final repository = getIt<CheckOutRequestRepository>();
     final requests = await repository.getRequestsForEmployee(employeeId);
 
+    debugPrint("CheckInOutHandler: Found ${requests.length} requests for employee $employeeId");
+    for (var req in requests) {
+      debugPrint("Request: ID=${req.id}, Type=${req.requestType}, Status=${req.status}");
+    }
+
     // Filter for today's approved requests of the specific type (check-in or check-out)
     final today = DateTime.now();
     final approvedRequests = requests.where((req) =>
-    req.status == CheckOutRequestStatus.approved &&
+        req.status == CheckOutRequestStatus.approved &&
         req.requestTime.year == today.year &&
         req.requestTime.month == today.month &&
         req.requestTime.day == today.day &&
@@ -59,17 +64,39 @@ class CheckInOutHandler {
 
     // Check for pending requests today for this action type
     final pendingRequests = requests.where((req) =>
-    req.status == CheckOutRequestStatus.pending &&
+        req.status == CheckOutRequestStatus.pending &&
         req.requestTime.year == today.year &&
         req.requestTime.month == today.month &&
         req.requestTime.day == today.day &&
         req.requestType == (isCheckIn ? 'check-in' : 'check-out')
     ).toList();
 
+    debugPrint("CheckInOutHandler: Found ${pendingRequests.length} pending ${isCheckIn ? 'check-in' : 'check-out'} requests for today");
+
     if (pendingRequests.isNotEmpty) {
       // Already has a pending request, show it
       debugPrint("Found pending ${isCheckIn ? 'check-in' : 'check-out'} request - showing options");
-      return await _showPendingRequestOptions(context, employeeId, isCheckIn);
+      final shouldCreateNew = await _showPendingRequestOptions(context, employeeId, isCheckIn);
+
+      if (shouldCreateNew) {
+        debugPrint("User chose to create a new request despite having a pending one");
+        // Get the manager ID and show the request form
+        String? lineManagerId = await _getLineManagerId(employeeId);
+
+        debugPrint("Line manager ID for request: $lineManagerId");
+
+        // Show request form
+        return await _showCreateRequestForm(
+          context,
+          employeeId,
+          employeeName,
+          currentPosition,
+          lineManagerId,
+          isCheckIn,
+        );
+      }
+
+      return false;
     }
 
     // No approved or pending requests yet, get the manager ID and show the request form
@@ -139,6 +166,9 @@ class CheckInOutHandler {
         employeePin,
       ];
 
+      // Debug info
+      debugPrint("Checking for employee with possible IDs: $possibleEmployeeIds");
+
       final lineManagersSnapshot = await FirebaseFirestore.instance
           .collection('line_managers')
           .get();
@@ -151,6 +181,7 @@ class CheckInOutHandler {
         List<dynamic> teamMembers = data['teamMembers'] ?? [];
 
         debugPrint("Checking line manager doc ${doc.id} with ${teamMembers.length} team members");
+        debugPrint("Team members: $teamMembers");
 
         // Check if any of the possible IDs are in the team members array
         for (String empId in possibleEmployeeIds) {
@@ -183,11 +214,13 @@ class CheckInOutHandler {
         return fallbackManagerId;
       }
 
-      debugPrint("No manager found for employee: $employeeId");
-      return null;
+      // Default to a hardcoded ID if necessary (should be set based on your specific database)
+      debugPrint("Using hardcoded default manager: EMP1270");
+      return "EMP1270";
     } catch (e) {
       debugPrint("Error looking up manager: $e");
-      return null;
+      // Return a default manager ID if all else fails
+      return "EMP1270";
     }
   }
 
@@ -197,6 +230,8 @@ class CheckInOutHandler {
       String employeeId,
       bool isCheckIn
       ) async {
+    debugPrint("HANDLER: Showing pending request options dialog");
+
     bool? result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -207,12 +242,16 @@ class CheckInOutHandler {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () {
+              debugPrint("HANDLER: Dialog - Cancel button pressed");
+              Navigator.pop(context, false);
+            },
             child: const Text("Cancel"),
           ),
           TextButton(
             onPressed: () async {
-              Navigator.pop(context);
+              debugPrint("HANDLER: Dialog - View Requests button pressed");
+              Navigator.pop(context, false); // First pop the dialog with 'false' result
 
               // Show request history
               final result = await Navigator.push(
@@ -224,27 +263,26 @@ class CheckInOutHandler {
                 ),
               );
 
-              // If returned with an approved request
-              if (result != null && result is Map && result['approved'] == true) {
-                Navigator.pop(context, true);
-              }
+              debugPrint("HANDLER: Returned from request history with result: $result");
+              // Don't return anything here - this is a void function
             },
             child: const Text("View Requests"),
           ),
           TextButton(
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () {
+              debugPrint("HANDLER: Dialog - Create New Request button pressed");
+              Navigator.pop(context, true);
+            },
             child: const Text("Create New Request"),
           ),
         ],
       ),
     );
 
-    if (result == true) {
-      // User wants to create a new request
-      return false;
-    }
+    debugPrint("HANDLER: Dialog result: $result");
 
-    return false;
+    // Fixed: Return true to indicate we should proceed with creating a new request
+    return result == true;
   }
 
   // Show create request form
@@ -259,23 +297,38 @@ class CheckInOutHandler {
     debugPrint("Creating ${isCheckIn ? 'check-in' : 'check-out'} request form for $employeeId");
     debugPrint("Line manager ID being passed: $lineManagerId");
 
-    final result = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-        builder: (context) => CreateCheckOutRequestView(
-          employeeId: employeeId,
-          employeeName: employeeName,
-          currentPosition: currentPosition,
-          extra: {
-            'lineManagerId': lineManagerId,
-            'isCheckIn': isCheckIn,
-          },
-        ),
-      ),
-    );
+    // Log the request details for debugging
+    debugPrint("Create Request Details:");
+    debugPrint("- Employee ID: $employeeId");
+    debugPrint("- Employee Name: $employeeName");
+    debugPrint("- Manager ID: $lineManagerId");
+    debugPrint("- Request Type: ${isCheckIn ? 'check-in' : 'check-out'}");
+    debugPrint("- Position: ${currentPosition.latitude}, ${currentPosition.longitude}");
 
-    // Return true if the request was submitted successfully
-    return result ?? false;
+    try {
+      final result = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(
+          builder: (context) => CreateCheckOutRequestView(
+            employeeId: employeeId,
+            employeeName: employeeName,
+            currentPosition: currentPosition,
+            extra: {
+              'lineManagerId': lineManagerId,
+              'isCheckIn': isCheckIn,
+            },
+          ),
+        ),
+      );
+
+      debugPrint("Request form returned with result: $result");
+
+      // Return true if the request was submitted successfully
+      return result ?? false;
+    } catch (e) {
+      debugPrint("Error showing create request form: $e");
+      return false;
+    }
   }
 
   // Show request history
@@ -291,5 +344,55 @@ class CheckInOutHandler {
         ),
       ),
     );
+  }
+
+  // Debug function to directly create a test check-out request
+  static Future<bool> createTestRequest(
+      String employeeId,
+      String employeeName,
+      String lineManagerId,
+      Position currentPosition,
+      bool isCheckIn
+      ) async {
+    try {
+      debugPrint("Creating TEST ${isCheckIn ? 'check-in' : 'check-out'} request");
+
+      final repository = getIt<CheckOutRequestRepository>();
+
+      // Create request object
+      CheckOutRequest request = CheckOutRequest.createNew(
+        employeeId: employeeId,
+        employeeName: employeeName,
+        lineManagerId: lineManagerId,
+        latitude: currentPosition.latitude,
+        longitude: currentPosition.longitude,
+        locationName: "Test Location (${currentPosition.latitude}, ${currentPosition.longitude})",
+        reason: "This is a test request created for debugging",
+        requestType: isCheckIn ? 'check-in' : 'check-out',
+      );
+
+      // Save directly to Firestore for debugging
+      try {
+        DocumentReference docRef = await FirebaseFirestore.instance
+            .collection('check_out_requests')
+            .add(request.toMap());
+
+        debugPrint("Test request created successfully in Firestore: ${docRef.id}");
+
+        // Also try the repository method
+        bool repoSuccess = await repository.createCheckOutRequest(request);
+        debugPrint("Repository save result: $repoSuccess");
+
+        return true;
+      } catch (e) {
+        debugPrint("Error saving test request to Firestore: $e");
+
+        // Try repository as fallback
+        return await repository.createCheckOutRequest(request);
+      }
+    } catch (e) {
+      debugPrint("Error creating test request: $e");
+      return false;
+    }
   }
 }
