@@ -1,12 +1,14 @@
-// lib/services/sync_service.dart - Fixed version
+// lib/services/sync_service.dart (updated)
 
 import 'dart:async';
 import 'package:face_auth_compatible/repositories/attendance_repository.dart';
+import 'package:face_auth_compatible/repositories/check_out_request_repository.dart';
 import 'package:face_auth_compatible/services/connectivity_service.dart';
 
 class SyncService {
   final ConnectivityService _connectivityService;
   final AttendanceRepository _attendanceRepository;
+  final CheckOutRequestRepository _checkOutRequestRepository;
 
   Timer? _syncTimer;
   bool _isSyncing = false;
@@ -15,8 +17,10 @@ class SyncService {
   SyncService({
     required ConnectivityService connectivityService,
     required AttendanceRepository attendanceRepository,
+    required CheckOutRequestRepository checkOutRequestRepository,
   }) : _connectivityService = connectivityService,
-        _attendanceRepository = attendanceRepository {
+        _attendanceRepository = attendanceRepository,
+        _checkOutRequestRepository = checkOutRequestRepository {
     // Initialize sync service when created
     initialize();
   }
@@ -39,7 +43,7 @@ class SyncService {
       }
     });
 
-    // Set up periodic sync every 5 minutes (reduced from 15 for testing)
+    // Set up periodic sync every 5 minutes
     _syncTimer = Timer.periodic(const Duration(minutes: 5), (_) {
       if (_connectivityService.currentStatus == ConnectionStatus.online) {
         print("SyncService: Periodic sync triggered");
@@ -71,17 +75,23 @@ class SyncService {
     print("SyncService: Starting sync...");
 
     try {
-      // Get pending records count
-      final pendingRecords = await _attendanceRepository.getPendingRecords();
-      print("SyncService: Found ${pendingRecords.length} pending records");
+      // Sync attendance records
+      final pendingAttendanceRecords = await _attendanceRepository.getPendingRecords();
+      print("SyncService: Found ${pendingAttendanceRecords.length} pending attendance records");
 
-      if (pendingRecords.isNotEmpty) {
-        bool success = await _attendanceRepository.syncPendingRecords();
-        print("SyncService: Sync ${success ? 'successful' : 'failed'}");
+      if (pendingAttendanceRecords.isNotEmpty) {
+        bool attendanceSuccess = await _attendanceRepository.syncPendingRecords();
+        print("SyncService: Attendance sync ${attendanceSuccess ? 'successful' : 'failed'}");
       }
 
-      // You could add other sync operations here
-      // For example: sync user profiles, locations, etc.
+      // Sync check-out requests
+      final pendingRequests = await _checkOutRequestRepository.getPendingSyncRequests();
+      print("SyncService: Found ${pendingRequests.length} pending check-out requests");
+
+      if (pendingRequests.isNotEmpty) {
+        bool requestsSuccess = await _checkOutRequestRepository.syncAllPendingRequests();
+        print("SyncService: Check-out requests sync ${requestsSuccess ? 'successful' : 'failed'}");
+      }
 
     } catch (e) {
       print('SyncService: Error during sync: $e');
@@ -108,10 +118,17 @@ class SyncService {
     _isSyncing = true;
 
     try {
-      final success = await _attendanceRepository.syncPendingRecords();
+      // Sync attendance records
+      bool attendanceSuccess = await _attendanceRepository.syncPendingRecords();
+
+      // Sync check-out requests
+      bool requestsSuccess = await _checkOutRequestRepository.syncAllPendingRequests();
+
       _isSyncing = false;
-      print("SyncService: Manual sync ${success ? 'successful' : 'failed'}");
-      return success;
+      print("SyncService: Manual sync completed");
+
+      // Return true only if both syncs were successful
+      return attendanceSuccess && requestsSuccess;
     } catch (e) {
       _isSyncing = false;
       print("SyncService: Manual sync error: $e");
