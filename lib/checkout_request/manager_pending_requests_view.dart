@@ -76,17 +76,70 @@ class _ManagerPendingRequestsViewState extends State<ManagerPendingRequestsView>
     try {
       final repository = getIt<CheckOutRequestRepository>();
 
-      // Get all pending requests for the manager, regardless of type
-      final requests = await repository.getPendingRequestsForManager(widget.managerId);
+      // Improved debugging
+      debugPrint("MANAGER VIEW: Loading pending requests for manager ID: ${widget.managerId}");
+
+      // Add additional formats to check for pending requests
+      List<String> possibleManagerIds = [
+        widget.managerId,
+        widget.managerId.startsWith('EMP') ? widget.managerId.substring(3) : 'EMP${widget.managerId}',
+      ];
+
+      List<CheckOutRequest> allRequests = [];
+
+      // Try to fetch using different manager ID formats
+      for (String managerId in possibleManagerIds) {
+        debugPrint("MANAGER VIEW: Trying to fetch requests with manager ID: $managerId");
+        final requests = await repository.getPendingRequestsForManager(managerId);
+        if (requests.isNotEmpty) {
+          debugPrint("MANAGER VIEW: Found ${requests.length} pending requests with manager ID: $managerId");
+          allRequests.addAll(requests);
+        }
+      }
+
+      // Direct Firestore query as a backup
+      if (allRequests.isEmpty) {
+        debugPrint("MANAGER VIEW: Trying direct Firestore query for pending requests...");
+
+        // Try all manager ID formats
+        for (String managerId in possibleManagerIds) {
+          final snapshot = await FirebaseFirestore.instance
+              .collection('check_out_requests')
+              .where('lineManagerId', isEqualTo: managerId)
+              .where('status', isEqualTo: 'pending')
+              .get();
+
+          debugPrint("MANAGER VIEW: Direct query found ${snapshot.docs.length} requests for $managerId");
+
+          // Convert to request objects
+          for (var doc in snapshot.docs) {
+            allRequests.add(CheckOutRequest.fromMap(doc.data(), doc.id));
+          }
+        }
+      }
+
+      // Remove duplicates by ID
+      final uniqueRequests = <String, CheckOutRequest>{};
+      for (var request in allRequests) {
+        uniqueRequests[request.id] = request;
+      }
+
+      // Final list of unique requests
+      final finalRequests = uniqueRequests.values.toList();
 
       setState(() {
-        _pendingRequests = requests;
+        _pendingRequests = finalRequests;
         _isLoading = false;
       });
 
-      debugPrint("Loaded ${requests.length} pending requests: ${requests.map((req) => req.requestType).toList()}");
+      debugPrint("MANAGER VIEW: Loaded ${finalRequests.length} unique pending requests");
+
+      // Log the full data for debugging
+      for (var request in finalRequests) {
+        debugPrint("Request ID: ${request.id}, From: ${request.employeeName}, Type: ${request.requestType}, Status: ${request.status}");
+      }
     } catch (e) {
-      print("Error loading pending requests: $e");
+      debugPrint("MANAGER VIEW: Error loading pending requests: $e");
       setState(() {
         _isLoading = false;
       });
@@ -328,6 +381,9 @@ class _ManagerPendingRequestsViewState extends State<ManagerPendingRequestsView>
     final dateFormat = DateFormat('EEE, MMM d, yyyy');
     final timeFormat = DateFormat('h:mm a');
 
+    // Different colors based on request type
+    final Color requestTypeColor = request.requestType == 'check-in' ? Colors.blue : Colors.purple;
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(
@@ -359,19 +415,17 @@ class _ManagerPendingRequestsViewState extends State<ManagerPendingRequestsView>
                       margin: const EdgeInsets.only(right: 8),
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: request.requestType == 'check-in'
-                            ? Colors.blue.withOpacity(0.1)
-                            : Colors.purple.withOpacity(0.1),
+                        color: requestTypeColor.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(
-                          color: request.requestType == 'check-in' ? Colors.blue : Colors.purple,
+                          color: requestTypeColor,
                           width: 1,
                         ),
                       ),
                       child: Text(
                         request.requestType == 'check-in' ? "Check-In" : "Check-Out",
                         style: TextStyle(
-                          color: request.requestType == 'check-in' ? Colors.blue : Colors.purple,
+                          color: requestTypeColor,
                           fontSize: 12,
                           fontWeight: FontWeight.bold,
                         ),

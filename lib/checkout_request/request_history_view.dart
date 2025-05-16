@@ -198,6 +198,9 @@ class _CheckOutRequestHistoryViewState extends State<CheckOutRequestHistoryView>
     final dateFormat = DateFormat('EEE, MMM d, yyyy');
     final timeFormat = DateFormat('h:mm a');
 
+    // Different colors based on request type
+    final Color requestTypeColor = request.requestType == 'check-in' ? Colors.blue : Colors.purple;
+
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       shape: RoundedRectangleBorder(
@@ -226,19 +229,17 @@ class _CheckOutRequestHistoryViewState extends State<CheckOutRequestHistoryView>
                       margin: const EdgeInsets.only(right: 8),
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: request.requestType == 'check-in'
-                            ? Colors.blue.withOpacity(0.1)
-                            : Colors.purple.withOpacity(0.1),
+                        color: requestTypeColor.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(
-                          color: request.requestType == 'check-in' ? Colors.blue : Colors.purple,
+                          color: requestTypeColor,
                           width: 1,
                         ),
                       ),
                       child: Text(
                         request.requestType == 'check-in' ? "Check-In" : "Check-Out",
                         style: TextStyle(
-                          color: request.requestType == 'check-in' ? Colors.blue : Colors.purple,
+                          color: requestTypeColor,
                           fontSize: 12,
                           fontWeight: FontWeight.bold,
                         ),

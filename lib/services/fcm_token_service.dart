@@ -1,9 +1,11 @@
 // lib/services/fcm_token_service.dart
+// Complete implementation with fixed return type error
 
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:flutter/foundation.dart';
 
 class FcmTokenService {
   final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
@@ -17,9 +19,11 @@ class FcmTokenService {
         alert: true,
         badge: true,
         sound: true,
+        criticalAlert: true,     // Important for high-priority notifications
+        provisional: false,
       );
 
-      print('User granted notification permission: ${settings.authorizationStatus}');
+      debugPrint('User granted notification permission: ${settings.authorizationStatus}');
 
       if (settings.authorizationStatus == AuthorizationStatus.authorized ||
           settings.authorizationStatus == AuthorizationStatus.provisional) {
@@ -30,15 +34,32 @@ class FcmTokenService {
           // Save token locally
           await _saveTokenLocally(token);
 
-          // Upload to Firestore using Cloud Function
-          await _updateTokenInFirestore(userId, token);
+          // Upload to Firestore using multiple methods for redundancy
+          bool success = await _updateTokenInFirestore(userId, token);
 
-          print('FCM Token registered for user: $userId');
+          // Also try with alternative ID format
+          if (userId.startsWith('EMP')) {
+            await _updateTokenInFirestore(userId.substring(3), token);
+          } else {
+            await _updateTokenInFirestore('EMP$userId', token);
+          }
+
+          // Setup token refresh listener
+          setupTokenRefreshListener(userId);
+
+          debugPrint('FCM Token registered for user: $userId, token: ${token.substring(0, 10)}...');
+
+          // Don't return the token
         }
+      } else {
+        debugPrint('User declined notification permissions: ${settings.authorizationStatus}');
       }
     } catch (e) {
-      print('Error registering FCM token: $e');
+      debugPrint('Error registering FCM token: $e');
     }
+
+    // Don't return anything, just complete the Future
+    return;
   }
 
   // Save token locally for future reference
@@ -48,7 +69,7 @@ class FcmTokenService {
   }
 
   // Upload the token to Firestore
-  Future<void> _updateTokenInFirestore(String userId, String token) async {
+  Future<bool> _updateTokenInFirestore(String userId, String token) async {
     try {
       // First try direct Firestore update
       try {
@@ -56,43 +77,78 @@ class FcmTokenService {
           'token': token,
           'updatedAt': FieldValue.serverTimestamp(),
         });
-        return;
+        debugPrint('FCM token updated in Firestore for user: $userId');
+        return true;
       } catch (e) {
-        print('Direct Firestore update failed, trying Cloud Function: $e');
+        debugPrint('Direct Firestore update failed, trying Cloud Function: $e');
       }
 
       // If direct update fails, use the Cloud Function
-      final HttpsCallable callable = _functions.httpsCallable('storeUserFcmToken');
+      final callable = _functions.httpsCallable('storeUserFcmToken');
 
       final result = await callable.call({
         'userId': userId,
         'token': token,
       });
 
-      print('Cloud Function result: ${result.data}');
+      debugPrint('Cloud Function result: ${result.data}');
+      return true;
     } catch (e) {
-      print('Error updating FCM token in Firestore: $e');
+      debugPrint('Error updating FCM token in Firestore: $e');
+      return false;
     }
   }
 
   // Listen for token refreshes
   void setupTokenRefreshListener(String userId) {
     _firebaseMessaging.onTokenRefresh.listen((newToken) {
+      debugPrint('FCM Token refreshed. Updating for user: $userId');
       _saveTokenLocally(newToken);
       _updateTokenInFirestore(userId, newToken);
-      print('FCM Token refreshed for user: $userId');
+
+      // Also try with alternative ID format
+      if (userId.startsWith('EMP')) {
+        _updateTokenInFirestore(userId.substring(3), newToken);
+      } else {
+        _updateTokenInFirestore('EMP$userId', newToken);
+      }
     });
   }
 
   // Subscribe to topics
   Future<void> subscribeToTopic(String topic) async {
     await _firebaseMessaging.subscribeToTopic(topic);
-    print('Subscribed to topic: $topic');
+    debugPrint('Subscribed to topic: $topic');
   }
 
   // Unsubscribe from topics
   Future<void> unsubscribeFromTopic(String topic) async {
     await _firebaseMessaging.unsubscribeFromTopic(topic);
-    print('Unsubscribed from topic: $topic');
+    debugPrint('Unsubscribed from topic: $topic');
+  }
+
+  // Subscribe manager to both formats of manager ID
+  Future<void> subscribeManagerToAllFormats(String managerId) async {
+    // Subscribe to standard format
+    await subscribeToTopic('manager_$managerId');
+
+    // Also subscribe to alternative format
+    if (managerId.startsWith('EMP')) {
+      await subscribeToTopic('manager_${managerId.substring(3)}');
+    } else {
+      await subscribeToTopic('manager_EMP$managerId');
+    }
+  }
+
+  // Get the currently stored FCM token
+  Future<String?> getStoredToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('fcm_token');
+  }
+
+  // Clear stored token (useful for logging out)
+  Future<void> clearStoredToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('fcm_token');
   }
 }

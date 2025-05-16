@@ -20,7 +20,7 @@ class CheckInOutHandler {
     required bool isWithinGeofence,
     required Position? currentPosition,
     required VoidCallback onRegularAction,
-    required bool isCheckIn, // Parameter to distinguish between check-in and check-out
+    required bool isCheckIn, // This parameter indicates whether this is check-in or check-out
   }) async {
     // If within geofence, proceed with normal action
     if (isWithinGeofence) {
@@ -36,7 +36,7 @@ class CheckInOutHandler {
       return false;
     }
 
-    // Check if there's an approved request for today
+    // Check if there's an approved request for today - making sure to filter by request type
     final repository = getIt<CheckOutRequestRepository>();
     final requests = await repository.getRequestsForEmployee(employeeId);
 
@@ -101,8 +101,9 @@ class CheckInOutHandler {
         return cachedManagerId;
       }
 
-      // If no cached value, try to get from Firestore
-      // First check employee's own document for lineManagerId field
+      // If no cached value, try multiple search approaches:
+
+      // 1. First check the employee's own document for lineManagerId field
       final employeeDoc = await FirebaseFirestore.instance
           .collection('employees')
           .doc(employeeId)
@@ -113,46 +114,58 @@ class CheckInOutHandler {
 
         if (data.containsKey('lineManagerId') && data['lineManagerId'] != null) {
           String managerId = data['lineManagerId'];
-
           // Cache for next time
           await prefs.setString('line_manager_id_$employeeId', managerId);
-
           debugPrint("Found manager ID in employee doc: $managerId");
           return managerId;
         }
       }
 
-      // If not found in employee doc, check line_managers collection
+      // 2. If not found in employee doc, check line_managers collection with multiple ID formats
       debugPrint("Checking line_managers collection for employee: $employeeId");
+
+      // Get employee's PIN for additional search
+      String employeePin = '';
+      if (employeeDoc.exists) {
+        Map<String, dynamic> data = employeeDoc.data() as Map<String, dynamic>;
+        employeePin = data['pin'] ?? '';
+      }
 
       // Try different formats that might be used in the database
       final List<String> possibleEmployeeIds = [
         employeeId,
-        'EMP$employeeId',
-        employeeId.startsWith('EMP') ? employeeId.substring(3) : employeeId,
+        employeeId.replaceFirst('EMP', ''), // Remove EMP prefix if present
+        'EMP$employeeId', // Add EMP prefix if not present
+        employeePin,
       ];
 
-      for (String empId in possibleEmployeeIds) {
-        debugPrint("Checking for team member: $empId");
-        final lineManagerQuery = await FirebaseFirestore.instance
-            .collection('line_managers')
-            .where('teamMembers', arrayContains: empId)
-            .limit(1)
-            .get();
+      final lineManagersSnapshot = await FirebaseFirestore.instance
+          .collection('line_managers')
+          .get();
 
-        if (lineManagerQuery.docs.isNotEmpty) {
-          final managerDoc = lineManagerQuery.docs.first;
-          final managerId = managerDoc.data()['managerId'];
+      debugPrint("Found ${lineManagersSnapshot.docs.length} line manager documents");
 
-          // Cache for next time
-          await prefs.setString('line_manager_id_$employeeId', managerId);
+      // Iterate through all line manager documents
+      for (var doc in lineManagersSnapshot.docs) {
+        Map<String, dynamic> data = doc.data();
+        List<dynamic> teamMembers = data['teamMembers'] ?? [];
 
-          debugPrint("Found manager ID in line_managers collection: $managerId");
-          return managerId;
+        debugPrint("Checking line manager doc ${doc.id} with ${teamMembers.length} team members");
+
+        // Check if any of the possible IDs are in the team members array
+        for (String empId in possibleEmployeeIds) {
+          if (teamMembers.contains(empId)) {
+            String managerId = data['managerId'];
+            debugPrint("Found! Employee is in team of manager: $managerId");
+
+            // Cache for next time
+            await prefs.setString('line_manager_id_$employeeId', managerId);
+            return managerId;
+          }
         }
       }
 
-      // Try to find any manager if no specific one is found
+      // If still not found, try to find any manager
       debugPrint("No specific manager found - searching for any manager");
       final managerQuery = await FirebaseFirestore.instance
           .collection('employees')

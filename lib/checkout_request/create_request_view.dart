@@ -95,6 +95,8 @@ class _CreateCheckOutRequestViewState extends State<CreateCheckOutRequestView> {
   // Find line manager if not provided
   Future<void> _findLineManager() async {
     try {
+      debugPrint("Finding line manager for employee: ${widget.employeeId}");
+
       // First try to get from shared preferences (faster)
       SharedPreferences prefs = await SharedPreferences.getInstance();
       String? savedManagerId = prefs.getString('line_manager_id_${widget.employeeId}');
@@ -105,71 +107,106 @@ class _CreateCheckOutRequestViewState extends State<CreateCheckOutRequestView> {
           _lineManagerId = savedManagerId;
           _lineManagerName = savedManagerName;
         });
+        debugPrint("Using cached line manager: $_lineManagerName (ID: $_lineManagerId)");
         return;
       }
 
-      // If not in preferences, try to get from Firestore
-      // First check employee document for managerInformation
-      final employeeDoc = await FirebaseFirestore.instance
-          .collection('employees')
-          .doc(widget.employeeId)
-          .get();
+      // Prepare different formats of employee ID to check in team members array
+      List<String> possibleIds = [
+        widget.employeeId,
+        widget.employeeId.replaceFirst('EMP', ''), // Remove EMP prefix if present
+      ];
 
-      if (employeeDoc.exists) {
-        Map<String, dynamic> data = employeeDoc.data() as Map<String, dynamic>;
-
-        if (data.containsKey('lineManagerId') && data['lineManagerId'] != null) {
-          // Get manager name from their employee document
-          final managerDoc = await FirebaseFirestore.instance
-              .collection('employees')
-              .doc(data['lineManagerId'])
-              .get();
-
-          if (managerDoc.exists) {
-            setState(() {
-              _lineManagerId = data['lineManagerId'];
-              _lineManagerName = managerDoc.data()?['name'] ?? "Unknown Manager";
-            });
-
-            // Save for next time
-            await prefs.setString('line_manager_id_${widget.employeeId}', _lineManagerId!);
-            await prefs.setString('line_manager_name_${widget.employeeId}', _lineManagerName);
-            return;
-          }
-        }
+      // If employee ID is numeric, also use it directly
+      if (int.tryParse(widget.employeeId) != null) {
+        possibleIds.add(widget.employeeId); // Already added above, but making sure
+      } else if (widget.employeeId.startsWith('EMP') &&
+          int.tryParse(widget.employeeId.substring(3)) != null) {
+        possibleIds.add(widget.employeeId.substring(3)); // Just the number part
       }
 
-      // If not found in employee document, check line_managers collection
+      debugPrint("Checking for employee with possible IDs: $possibleIds");
+
+      // Check all line_managers documents
       final lineManagersSnapshot = await FirebaseFirestore.instance
           .collection('line_managers')
-          .where('teamMembers', arrayContains: widget.employeeId)
-          .limit(1)
           .get();
 
-      if (lineManagersSnapshot.docs.isNotEmpty) {
-        final managerData = lineManagersSnapshot.docs[0].data();
-        final managerId = managerData['managerId'];
+      debugPrint("Found ${lineManagersSnapshot.docs.length} line manager documents");
 
-        // Get manager name
-        final managerDoc = await FirebaseFirestore.instance
-            .collection('employees')
-            .doc(managerId)
-            .get();
+      // Iterate through all line manager documents
+      for (var doc in lineManagersSnapshot.docs) {
+        Map<String, dynamic> data = doc.data();
+        List<dynamic> teamMembers = data['teamMembers'] ?? [];
 
-        if (managerDoc.exists) {
-          setState(() {
-            _lineManagerId = managerId;
-            _lineManagerName = managerDoc.data()?['name'] ?? "Unknown Manager";
-          });
+        debugPrint("Checking line manager doc ${doc.id} with ${teamMembers.length} team members");
+
+        // Check if any of the possible IDs are in the team members array
+        bool foundMatch = false;
+        for (String empId in possibleIds) {
+          if (teamMembers.contains(empId)) {
+            foundMatch = true;
+            break;
+          }
+        }
+
+        if (foundMatch) {
+          String managerId = data['managerId'];
+          String managerName = data['managerName'] ?? 'Manager';
+
+          debugPrint("Found manager: $managerName (ID: $managerId)");
 
           // Save for next time
-          await prefs.setString('line_manager_id_${widget.employeeId}', _lineManagerId!);
-          await prefs.setString('line_manager_name_${widget.employeeId}', _lineManagerName);
+          await prefs.setString('line_manager_id_${widget.employeeId}', managerId);
+          await prefs.setString('line_manager_name_${widget.employeeId}', managerName);
+
+          setState(() {
+            _lineManagerId = managerId;
+            _lineManagerName = managerName;
+          });
           return;
         }
       }
 
-      // If still not found, try to find any manager
+      // If not found in line_managers, check employee's document
+      try {
+        final employeeDoc = await FirebaseFirestore.instance
+            .collection('employees')
+            .doc(widget.employeeId)
+            .get();
+
+        if (employeeDoc.exists) {
+          Map<String, dynamic> data = employeeDoc.data() as Map<String, dynamic>;
+
+          if (data.containsKey('lineManagerId') && data['lineManagerId'] != null) {
+            String managerId = data['lineManagerId'];
+
+            // Get manager name from their employee document
+            final managerDoc = await FirebaseFirestore.instance
+                .collection('employees')
+                .doc(managerId)
+                .get();
+
+            if (managerDoc.exists) {
+              String managerName = managerDoc.data()?['name'] ?? "Unknown Manager";
+
+              setState(() {
+                _lineManagerId = managerId;
+                _lineManagerName = managerName;
+              });
+
+              // Save for next time
+              await prefs.setString('line_manager_id_${widget.employeeId}', managerId);
+              await prefs.setString('line_manager_name_${widget.employeeId}', managerName);
+              return;
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint("Error checking employee document: $e");
+      }
+
+      // If still no manager found, try to find any manager
       final managerQuery = await FirebaseFirestore.instance
           .collection('employees')
           .where('isManager', isEqualTo: true)
@@ -177,21 +214,25 @@ class _CreateCheckOutRequestViewState extends State<CreateCheckOutRequestView> {
           .get();
 
       if (managerQuery.docs.isNotEmpty) {
+        final managerDoc = managerQuery.docs[0];
         setState(() {
-          _lineManagerId = managerQuery.docs[0].id;
-          _lineManagerName = managerQuery.docs[0].data()['name'] ?? "Default Manager";
+          _lineManagerId = managerDoc.id;
+          _lineManagerName = managerDoc.data()['name'] ?? "Default Manager";
         });
+
+        // Save for next time
+        await prefs.setString('line_manager_id_${widget.employeeId}', _lineManagerId!);
+        await prefs.setString('line_manager_name_${widget.employeeId}', _lineManagerName);
         return;
       }
 
-      // If still not found, set default values
       setState(() {
         _lineManagerId = null;
         _lineManagerName = "No manager assigned";
       });
 
     } catch (e) {
-      print("Error finding line manager: $e");
+      debugPrint("Error finding line manager: $e");
       setState(() {
         _lineManagerId = null;
         _lineManagerName = "Error finding manager";

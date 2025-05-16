@@ -1,3 +1,5 @@
+// functions/index.js (or create this file if it doesn't exist)
+
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 admin.initializeApp();
@@ -17,6 +19,10 @@ exports.sendCheckOutRequestNotification = functions.firestore
 
         // Get the employee ID from the request
         const employeeId = newValue.employeeId;
+        const requestType = newValue.requestType || 'check-out'; // Default for backward compatibility
+
+        // Format the request type for display - ensuring proper capitalization
+        const displayType = requestType === 'check-in' ? 'Check-In' : 'Check-Out';
 
         return admin.firestore().collection('fcm_tokens').doc(employeeId).get()
             .then(tokenDoc => {
@@ -35,13 +41,13 @@ exports.sendCheckOutRequestNotification = functions.firestore
                 let notification;
                 if (newValue.status === 'approved') {
                     notification = {
-                        title: 'Check-Out Request Approved',
-                        body: 'Your request to check out has been approved.',
+                        title: `${displayType} Request Approved`,
+                        body: `Your request to ${requestType.replace('-', ' ')} has been approved.`,
                     };
                 } else if (newValue.status === 'rejected') {
                     notification = {
-                        title: 'Check-Out Request Rejected',
-                        body: 'Your request to check out has been rejected.',
+                        title: `${displayType} Request Rejected`,
+                        body: `Your request to ${requestType.replace('-', ' ')} has been rejected.`,
                     };
                 } else {
                     console.log(`Unknown status: ${newValue.status}`);
@@ -56,10 +62,31 @@ exports.sendCheckOutRequestNotification = functions.firestore
                         requestId: context.params.requestId,
                         status: newValue.status,
                         employeeId: employeeId,
+                        requestType: requestType,
                         message: newValue.responseMessage || '',
                         click_action: 'FLUTTER_NOTIFICATION_CLICK',
                     },
                     token: token,
+                    // Add high priority for Android
+                    android: {
+                        priority: "high",
+                        notification: {
+                            sound: "default",
+                            priority: "high",
+                            channel_id: "check_requests_channel"
+                        }
+                    },
+                    // Add important settings for iOS
+                    apns: {
+                        payload: {
+                            aps: {
+                                sound: "default",
+                                badge: 1,
+                                content_available: true,
+                                interruption_level: "time-sensitive"
+                            }
+                        }
+                    }
                 };
 
                 // Send the notification
@@ -80,46 +107,90 @@ exports.sendNewRequestNotification = functions.firestore
 
         // Get the line manager ID from the request
         const lineManagerId = requestData.lineManagerId;
+        const requestType = requestData.requestType || 'check-out'; // Default for backward compatibility
 
-        return admin.firestore().collection('fcm_tokens').doc(lineManagerId).get()
-            .then(tokenDoc => {
-                if (!tokenDoc.exists) {
-                    console.log(`No FCM token found for manager ${lineManagerId}`);
-                    return null;
+        // Format the request type for display - ensuring proper capitalization
+        const displayType = requestType === 'check-in' ? 'Check-In' : 'Check-Out';
+
+        // Try multiple formats for manager ID
+        const managerIds = [
+            lineManagerId,
+            lineManagerId.startsWith('EMP') ? lineManagerId.substring(3) : `EMP${lineManagerId}`
+        ];
+
+        // Function to send notification with token
+        const sendNotificationWithToken = (token) => {
+            // Create notification
+            const notification = {
+                title: `New ${displayType} Request`,
+                body: `${requestData.employeeName} has requested to ${requestType.replace('-', ' ')} from an offsite location.`,
+            };
+
+            // Add data payload
+            const payload = {
+                notification,
+                data: {
+                    type: 'new_check_out_request',
+                    requestId: context.params.requestId,
+                    employeeId: requestData.employeeId,
+                    employeeName: requestData.employeeName,
+                    locationName: requestData.locationName,
+                    requestType: requestType,
+                    click_action: 'FLUTTER_NOTIFICATION_CLICK',
+                },
+                token: token,
+                // Add high priority for Android
+                android: {
+                    priority: "high",
+                    notification: {
+                        sound: "default",
+                        priority: "high",
+                        channel_id: "check_requests_channel"
+                    }
+                },
+                // Add important settings for iOS
+                apns: {
+                    payload: {
+                        aps: {
+                            sound: "default",
+                            badge: 1,
+                            content_available: true,
+                            interruption_level: "time-sensitive"
+                        }
+                    }
                 }
+            };
 
-                const token = tokenDoc.data().token;
-                if (!token) {
-                    console.log(`FCM token is null for manager ${lineManagerId}`);
-                    return null;
+            // Send the notification
+            console.log(`Sending notification to manager with token ${token}`);
+            return admin.messaging().send(payload);
+        };
+
+        // Try to find token for any of the manager IDs
+        const findAndSendNotification = async () => {
+            for (const managerId of managerIds) {
+                try {
+                    const tokenDoc = await admin.firestore().collection('fcm_tokens').doc(managerId).get();
+
+                    if (tokenDoc.exists) {
+                        const token = tokenDoc.data().token;
+                        if (token) {
+                            console.log(`Found token for manager ${managerId}`);
+                            return sendNotificationWithToken(token);
+                        }
+                    }
+                } catch (err) {
+                    console.log(`Error checking token for ${managerId}: ${err}`);
                 }
+            }
 
-                // Create notification
-                const notification = {
-                    title: 'New Check-Out Request',
-                    body: `${requestData.employeeName} has requested to check out from an offsite location.`,
-                };
+            console.log(`No FCM token found for any manager ID: ${managerIds.join(', ')}`);
+            return null;
+        };
 
-                // Add data payload
-                const payload = {
-                    notification,
-                    data: {
-                        type: 'new_check_out_request',
-                        requestId: context.params.requestId,
-                        employeeId: requestData.employeeId,
-                        employeeName: requestData.employeeName,
-                        locationName: requestData.locationName,
-                        click_action: 'FLUTTER_NOTIFICATION_CLICK',
-                    },
-                    token: token,
-                };
-
-                // Send the notification
-                console.log(`Sending notification to manager ${lineManagerId} with token ${token}`);
-                return admin.messaging().send(payload);
-            })
+        return findAndSendNotification()
             .catch(error => {
-                console.error('Error sending notification:', error);
+                console.error('Error in send notification process:', error);
                 return null;
             });
     });
@@ -148,3 +219,43 @@ exports.storeUserFcmToken = functions.https.onCall((data, context) => {
             throw new functions.https.HttpsError('internal', error.message);
         });
 });
+
+// Also subscribe manager to topic for added reliability
+exports.subscribeManagerToTopic = functions.firestore
+    .document('line_managers/{managerId}')
+    .onCreate((snapshot, context) => {
+        const data = snapshot.data();
+        const managerId = data.managerId;
+
+        if (!managerId) {
+            console.log('No managerId found in new line_managers document');
+            return null;
+        }
+
+        // Get manager's token
+        return admin.firestore().collection('fcm_tokens').doc(managerId).get()
+            .then(tokenDoc => {
+                if (!tokenDoc.exists) {
+                    console.log(`No FCM token found for manager ${managerId}`);
+                    return null;
+                }
+
+                const token = tokenDoc.data().token;
+                if (!token) {
+                    console.log(`FCM token is null for manager ${managerId}`);
+                    return null;
+                }
+
+                // Subscribe to manager topic
+                const topicName = `manager_${managerId}`;
+                return admin.messaging().subscribeToTopic(token, topicName)
+                    .then(response => {
+                        console.log(`Successfully subscribed to topic: ${topicName}`);
+                        return response;
+                    });
+            })
+            .catch(error => {
+                console.error('Error subscribing to topic:', error);
+                return null;
+            });
+    });

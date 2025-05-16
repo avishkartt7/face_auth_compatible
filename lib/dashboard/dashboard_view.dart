@@ -2,6 +2,7 @@
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'; // Add this for kDebugMode
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:face_auth_compatible/constants/theme.dart';
 import 'package:face_auth_compatible/pin_entry/pin_entry_view.dart';
@@ -14,15 +15,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:face_auth_compatible/model/location_model.dart';
-// Add this import at the top of dashboard_view.dart
 import 'package:face_auth_compatible/dashboard/team_management_view.dart';
 import 'package:face_auth_compatible/dashboard/checkout_handler.dart';
 import 'package:face_auth_compatible/checkout_request/manager_pending_requests_view.dart';
 import 'package:face_auth_compatible/checkout_request/request_history_view.dart';
 import 'package:face_auth_compatible/repositories/check_out_request_repository.dart';
 import 'package:face_auth_compatible/services/notification_service.dart';
-
-// New imports for offline functionality
 import 'package:face_auth_compatible/services/connectivity_service.dart';
 import 'package:face_auth_compatible/common/widgets/connectivity_banner.dart';
 import 'package:face_auth_compatible/repositories/attendance_repository.dart';
@@ -31,6 +29,7 @@ import 'package:face_auth_compatible/services/sync_service.dart';
 import 'package:face_auth_compatible/services/service_locator.dart';
 import 'package:face_auth_compatible/test/offline_test_view.dart';
 import 'package:face_auth_compatible/dashboard/check_in_out_handler.dart';
+import 'package:face_auth_compatible/services/fcm_token_service.dart'; // Add this for FcmTokenService
 
 class DashboardView extends StatefulWidget {
   final String employeeId;
@@ -81,6 +80,9 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     super.initState();
     _loadDarkModePreference();
 
+    // Initialize notification services
+    _initializeNotifications();
+
     final notificationService = getIt<NotificationService>();
     notificationService.notificationStream.listen(_handleNotification);
 
@@ -95,7 +97,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       debugPrint("Connectivity status changed: $status");
       if (status == ConnectionStatus.online && _needsSync) {
         _syncService.syncData().then((_) {
-          // Refresh data after syncHO
+          // Refresh data after sync
           _fetchUserData();
           if (_isLineManager) {
             _loadPendingApprovalRequests();
@@ -141,30 +143,107 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   void _handleNotification(Map<String, dynamic> data) {
     // Handle different notification types
     final notificationType = data['type'];
+    debugPrint("Dashboard: Received notification of type: $notificationType");
 
     if (notificationType == 'check_out_request_update') {
+      // Extract data from notification
+      final String status = data['status'] ?? '';
+      final String requestType = data['requestType'] ?? 'check-out';
+      final String message = data['message'] ?? '';
+
       // Refresh request history if it's a check-out request update
       if (_isLineManager) {
         _loadPendingApprovalRequests();
       }
 
       // Show snackbar about request status
-      final bool isApproved = data['status'] == 'approved';
+      final bool isApproved = status == 'approved';
       CustomSnackBar.successSnackBar(
           isApproved
-              ? "Your check-out request has been approved"
-              : "Your check-out request has been rejected"
+              ? "Your ${requestType.replaceAll('-', ' ')} request has been approved"
+              : "Your ${requestType.replaceAll('-', ' ')} request has been rejected${message.isNotEmpty ? ': $message' : ''}"
       );
+
+      // Refresh in case request status affects current UI
+      _refreshDashboard();
+
     } else if (notificationType == 'new_check_out_request') {
+      // Extract data from notification
+      final String employeeName = data['employeeName'] ?? 'An employee';
+      final String requestType = data['requestType'] ?? 'check-out';
+
       // Refresh pending requests if it's a new request and user is a manager
       if (_isLineManager) {
         _loadPendingApprovalRequests();
 
         // Show snackbar about new request
-        final String employeeName = data['employeeName'] ?? 'An employee';
         CustomSnackBar.successSnackBar(
-            "$employeeName has requested to check out from an offsite location"
+            "$employeeName has requested to ${requestType.replaceAll('-', ' ')} from an offsite location"
         );
+
+        // Navigate to pending requests view if user tapped on notification
+        if (data['fromNotificationTap'] == 'true') {
+          _navigateToPendingRequests();
+        }
+      }
+    }
+  }
+
+  void _navigateToPendingRequests() {
+    if (_isLineManager) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => ManagerPendingRequestsView(
+            managerId: widget.employeeId,
+          ),
+        ),
+      ).then((_) {
+        // Refresh the pending count when returning
+        _loadPendingApprovalRequests();
+      });
+    }
+  }
+
+  Future<void> _initializeNotifications() async {
+    try {
+      // Get the notification service from service locator
+      final notificationService = getIt<NotificationService>();
+
+      // Register FCM token for this employee
+      final fcmTokenService = getIt<FcmTokenService>();
+      await fcmTokenService.registerTokenForUser(widget.employeeId);
+
+      // Subscribe to employee-specific notifications
+      await notificationService.subscribeToEmployeeTopic(widget.employeeId);
+
+      debugPrint("Dashboard: Initialized notifications for employee ${widget.employeeId}");
+
+      // If user is a line manager, also subscribe to manager notifications
+      // This will be done after _fetchUserData() determines if user is a manager
+    } catch (e) {
+      debugPrint("Dashboard: Error initializing notifications: $e");
+    }
+  }
+
+// Add this to handle when line manager status is determined
+  void _handleLineManagerStatusDetermined(bool isManager) {
+    // Called when we determine if user is a line manager
+    if (isManager) {
+      try {
+        final notificationService = getIt<NotificationService>();
+        notificationService.subscribeToManagerTopic('manager_${widget.employeeId}');
+
+        // Also try with manager ID without EMP prefix
+        if (widget.employeeId.startsWith('EMP')) {
+          notificationService.subscribeToManagerTopic('manager_${widget.employeeId.substring(3)}');
+        }
+
+        debugPrint("Dashboard: Subscribed to manager notifications");
+
+        // Load pending approval requests
+        _loadPendingApprovalRequests();
+      } catch (e) {
+        debugPrint("Dashboard: Error subscribing to manager notifications: $e");
       }
     }
   }
@@ -414,6 +493,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
         _lineManagerDocumentId = lineManagerDocId;
         _lineManagerData = foundLineManagerData;
       });
+      _handleLineManagerStatusDetermined(_isLineManager);
 
       debugPrint("=== LINE MANAGER CHECK COMPLETE ===");
       debugPrint("Is Line Manager: $_isLineManager");
@@ -614,6 +694,119 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       }
     } catch (e) {
       CustomSnackBar.errorSnackBar("Error: $e");
+    }
+  }
+
+
+  Future<void> _testNotification() async {
+    try {
+      final notificationService = getIt<NotificationService>();
+
+      // Show a dialog with options
+      final notificationType = await showDialog<String>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          title: const Text('Test Notification Type'),
+          children: [
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, 'check-in'),
+              child: const Text('New Check-In Request'),
+            ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, 'check-out'),
+              child: const Text('New Check-Out Request'),
+            ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, 'approved'),
+              child: const Text('Request Approved'),
+            ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, 'rejected'),
+              child: const Text('Request Rejected'),
+            ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, 'local'),
+              child: const Text('Local Notification (no Firebase)'),
+            ),
+          ],
+        ),
+      );
+
+      if (notificationType == null) return;
+
+      if (notificationType == 'local') {
+        // Send a local notification for testing
+        await notificationService.sendTestNotification(
+            'Test Notification',
+            'This is a test notification sent locally'
+        );
+        CustomSnackBar.successSnackBar("Local test notification sent");
+        return;
+      }
+
+      // Send a cloud message based on selected type
+      Map<String, dynamic> notificationData = {
+        'employeeId': widget.employeeId,
+        'click_action': 'FLUTTER_NOTIFICATION_CLICK',
+      };
+
+      String title, body;
+
+      switch (notificationType) {
+        case 'check-in':
+          title = 'New Check-In Request';
+          body = 'An employee has requested to check in from an offsite location';
+          notificationData['type'] = 'new_check_out_request';
+          notificationData['requestType'] = 'check-in';
+          break;
+        case 'check-out':
+          title = 'New Check-Out Request';
+          body = 'An employee has requested to check out from an offsite location';
+          notificationData['type'] = 'new_check_out_request';
+          notificationData['requestType'] = 'check-out';
+          break;
+        case 'approved':
+          title = 'Request Approved';
+          body = 'Your check-in request has been approved';
+          notificationData['type'] = 'check_out_request_update';
+          notificationData['status'] = 'approved';
+          notificationData['requestType'] = 'check-in';
+          break;
+        case 'rejected':
+          title = 'Request Rejected';
+          body = 'Your check-out request has been rejected';
+          notificationData['type'] = 'check_out_request_update';
+          notificationData['status'] = 'rejected';
+          notificationData['requestType'] = 'check-out';
+          notificationData['message'] = 'Not approved at this time';
+          break;
+        default:
+          title = 'Test Notification';
+          body = 'This is a test notification';
+          notificationData['type'] = 'test';
+      }
+
+      // Add a test notification to Cloud Firestore
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('fcm_token');
+
+      if (token == null) {
+        CustomSnackBar.errorSnackBar("No FCM token found");
+        return;
+      }
+
+      await FirebaseFirestore.instance.collection('notifications').add({
+        'token': token,
+        'title': title,
+        'body': body,
+        'data': notificationData,
+        'sentAt': FieldValue.serverTimestamp(),
+      });
+
+      CustomSnackBar.successSnackBar("Test notification sent to Firebase");
+    } catch (e) {
+      debugPrint("Error sending test notification: $e");
+      CustomSnackBar.errorSnackBar("Error sending test notification: $e");
     }
   }
 
@@ -1877,6 +2070,8 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
             },
           ),
 
+
+
           _buildMenuOption(
             icon: Icons.dark_mode_outlined,
             title: 'Dark mode',
@@ -2044,6 +2239,17 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
               }
             },
           ),
+
+          if (kDebugMode)
+            _buildMenuOption(
+              icon: Icons.notifications,
+              title: 'Test Notifications',
+              subtitle: 'Send a test push notification',
+              onTap: _testNotification,
+              showStatusIcon: true,
+              statusIcon: Icons.send,
+              statusColor: Colors.orange,
+            ),
 
           _buildMenuOption(
             icon: Icons.location_on_outlined,

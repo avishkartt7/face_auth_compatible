@@ -1,10 +1,10 @@
-// lib/repositories/check_out_request_repository.dart - Updated version
+// Complete implementation of lib/repositories/check_out_request_repository.dart
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:face_auth_compatible/model/check_out_request_model.dart';
 import 'package:face_auth_compatible/services/database_helper.dart';
 import 'package:face_auth_compatible/services/connectivity_service.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart'; // Add for debugPrint
 
 class CheckOutRequestRepository {
   final DatabaseHelper _dbHelper;
@@ -49,7 +49,7 @@ class CheckOutRequestRepository {
         request_type TEXT DEFAULT 'check-out'
       )
     ''');
-      print("Created check_out_requests table");
+      debugPrint("Created check_out_requests table");
     } else {
       // Check if requestType column exists, add it if it doesn't
       try {
@@ -58,7 +58,7 @@ class CheckOutRequestRepository {
         // Column doesn't exist, add it
         await db.execute(
             "ALTER TABLE check_out_requests ADD COLUMN request_type TEXT DEFAULT 'check-out'");
-        print("Added request_type column to existing table");
+        debugPrint("Added request_type column to existing table");
       }
     }
   }
@@ -73,14 +73,23 @@ class CheckOutRequestRepository {
       String localId = DateTime.now().millisecondsSinceEpoch.toString();
       String? remoteId;
 
+      // Log request details for debugging
+      debugPrint("REPO: Creating ${request.requestType} request from ${request.employeeName} to manager ${request.lineManagerId}");
+      debugPrint("REPO: Reason: ${request.reason}");
+      debugPrint("REPO: Location: ${request.locationName}");
+
       // If online, try to save to Firestore first
       if (_connectivityService.currentStatus == ConnectionStatus.online) {
         try {
+          // Create a document in the check_out_requests collection
           final docRef = await _firestore.collection('check_out_requests').add(request.toMap());
           remoteId = docRef.id;
-          print("Saved request to Firestore with ID: $remoteId");
+          debugPrint("REPO: Saved request to Firestore with ID: $remoteId");
+
+          // Also try to notify the manager directly
+          await _sendDirectManagerNotification(request);
         } catch (e) {
-          print("Error saving request to Firestore: $e");
+          debugPrint("REPO: Error saving request to Firestore: $e");
           // Continue with local storage even if Firestore fails
         }
       }
@@ -105,11 +114,11 @@ class CheckOutRequestRepository {
       };
 
       await _dbHelper.insert('check_out_requests', localData);
-      print("Saved request locally with ID: ${remoteId ?? localId}");
+      debugPrint("REPO: Saved request locally with ID: ${remoteId ?? localId}");
 
       return true;
     } catch (e) {
-      print("Error creating request: $e");
+      debugPrint("REPO: Error creating request: $e");
       return false;
     }
   }
@@ -120,41 +129,77 @@ class CheckOutRequestRepository {
       await _ensureTableExists();
       List<CheckOutRequest> requests = [];
 
+      // Prepare different formats of manager ID to check
+      List<String> possibleManagerIds = [
+        lineManagerId,
+        lineManagerId.startsWith('EMP') ? lineManagerId.substring(3) : 'EMP${lineManagerId}',
+      ];
+
+      debugPrint("REPO: Checking pending requests for manager IDs: $possibleManagerIds");
+
       // Check online first if possible
       if (_connectivityService.currentStatus == ConnectionStatus.online) {
         try {
-          final snapshot = await _firestore
-              .collection('check_out_requests')
-              .where('lineManagerId', isEqualTo: lineManagerId)
-              .where('status', isEqualTo: CheckOutRequestStatus.pending.toString().split('.').last)
-              .orderBy('requestTime', descending: true)
-              .get();
+          // Try each possible manager ID format
+          for (String managerId in possibleManagerIds) {
+            final snapshot = await _firestore
+                .collection('check_out_requests')
+                .where('lineManagerId', isEqualTo: managerId)
+                .where('status', isEqualTo: CheckOutRequestStatus.pending.toString().split('.').last)
+                .orderBy('requestTime', descending: true)
+                .get();
 
-          requests = snapshot.docs.map((doc) {
-            return CheckOutRequest.fromMap(doc.data(), doc.id);
-          }).toList();
+            if (snapshot.docs.isNotEmpty) {
+              debugPrint("REPO: Found ${snapshot.docs.length} pending requests for manager ID: $managerId");
 
-          // Also cache these requests locally
-          for (var request in requests) {
-            await _saveRequestLocally(request);
+              final requestsFromSnapshot = snapshot.docs.map((doc) {
+                return CheckOutRequest.fromMap(doc.data(), doc.id);
+              }).toList();
+
+              requests.addAll(requestsFromSnapshot);
+
+              // Cache these requests locally
+              for (var request in requestsFromSnapshot) {
+                await _saveRequestLocally(request);
+              }
+            }
           }
 
-          return requests;
+          // If requests were found online, return them
+          if (requests.isNotEmpty) {
+            // Remove any duplicates by ID
+            final uniqueRequests = <String, CheckOutRequest>{};
+            for (var request in requests) {
+              uniqueRequests[request.id] = request;
+            }
+
+            return uniqueRequests.values.toList();
+          }
         } catch (e) {
-          print("Error fetching requests from Firestore: $e");
+          debugPrint("REPO: Error fetching requests from Firestore: $e");
           // Fall back to local data
         }
       }
 
-      // Get from local storage
-      final localRequests = await _dbHelper.query(
-        'check_out_requests',
-        where: 'line_manager_id = ? AND status = ?',
-        whereArgs: [lineManagerId, CheckOutRequestStatus.pending.toString().split('.').last],
-        orderBy: 'request_time DESC',
-      );
+      // Get from local storage, trying each possible manager ID
+      List<Map<String, dynamic>> localRequests = [];
 
-      return localRequests.map((map) {
+      for (String managerId in possibleManagerIds) {
+        final managerRequests = await _dbHelper.query(
+          'check_out_requests',
+          where: 'line_manager_id = ? AND status = ?',
+          whereArgs: [managerId, CheckOutRequestStatus.pending.toString().split('.').last],
+          orderBy: 'request_time DESC',
+        );
+
+        if (managerRequests.isNotEmpty) {
+          debugPrint("REPO: Found ${managerRequests.length} local pending requests for manager ID: $managerId");
+          localRequests.addAll(managerRequests);
+        }
+      }
+
+      // Convert local requests to CheckOutRequest objects
+      final requestsFromLocal = localRequests.map((map) {
         // Convert from SQLite format to our model
         final formattedMap = {
           'employeeId': map['employee_id'],
@@ -175,8 +220,21 @@ class CheckOutRequestRepository {
 
         return CheckOutRequest.fromMap(formattedMap, map['id'] as String);
       }).toList();
+
+      if (requestsFromLocal.isNotEmpty) {
+        // Remove any duplicates by ID
+        final uniqueRequests = <String, CheckOutRequest>{};
+        for (var request in requestsFromLocal) {
+          uniqueRequests[request.id] = request;
+        }
+
+        return uniqueRequests.values.toList();
+      }
+
+      // If no requests found, return empty list
+      return [];
     } catch (e) {
-      print("Error getting pending requests: $e");
+      debugPrint("REPO: Error getting pending requests: $e");
       return [];
     }
   }
@@ -207,7 +265,7 @@ class CheckOutRequestRepository {
 
           return requests;
         } catch (e) {
-          print("Error fetching requests from Firestore: $e");
+          debugPrint("Error fetching requests from Firestore: $e");
           // Fall back to local data
         }
       }
@@ -242,7 +300,7 @@ class CheckOutRequestRepository {
         return CheckOutRequest.fromMap(formattedMap, map['id'] as String);
       }).toList();
     } catch (e) {
-      print("Error getting employee requests: $e");
+      debugPrint("Error getting employee requests: $e");
       return [];
     }
   }
@@ -289,7 +347,7 @@ class CheckOutRequestRepository {
         return true;
       }
     } catch (e) {
-      print("Error responding to request: $e");
+      debugPrint("Error responding to request: $e");
       return false;
     }
   }
@@ -334,7 +392,7 @@ class CheckOutRequestRepository {
         );
       }
     } catch (e) {
-      print("Error saving request locally: $e");
+      debugPrint("Error saving request locally: $e");
     }
   }
 
@@ -349,7 +407,7 @@ class CheckOutRequestRepository {
         whereArgs: [0],
       );
     } catch (e) {
-      print("Error getting pending sync requests: $e");
+      debugPrint("Error getting pending sync requests: $e");
       return [];
     }
   }
@@ -382,7 +440,7 @@ class CheckOutRequestRepository {
 
           return requests;
         } catch (e) {
-          print("Error fetching requests from Firestore: $e");
+          debugPrint("Error fetching requests from Firestore: $e");
           // Fall back to local data
         }
       }
@@ -401,12 +459,12 @@ class CheckOutRequestRepository {
 
       return _mapLocalRequestsToModels(localRequests);
     } catch (e) {
-      print("Error getting pending requests with type: $e");
+      debugPrint("Error getting pending requests with type: $e");
       return [];
     }
   }
 
-// Helper method to map local SQLite records to CheckOutRequest models
+  // Helper method to map local SQLite records to CheckOutRequest models
   List<CheckOutRequest> _mapLocalRequestsToModels(List<Map<String, dynamic>> localRequests) {
     return localRequests.map((map) {
       // Convert from SQLite format to our model
@@ -430,7 +488,6 @@ class CheckOutRequestRepository {
       return CheckOutRequest.fromMap(formattedMap, map['id'] as String);
     }).toList();
   }
-
 
   // Sync a specific request to Firestore
   Future<bool> syncRequest(Map<String, dynamic> localRequest) async {
@@ -497,7 +554,7 @@ class CheckOutRequestRepository {
 
       return true;
     } catch (e) {
-      print("Error syncing request: $e");
+      debugPrint("Error syncing request: $e");
       return false;
     }
   }
@@ -519,8 +576,100 @@ class CheckOutRequestRepository {
 
       return successCount == pendingRequests.length;
     } catch (e) {
-      print("Error syncing all requests: $e");
+      debugPrint("Error syncing all requests: $e");
       return false;
+    }
+  }
+
+  // Add a method to directly notify the manager as a backup
+  Future<void> _sendDirectManagerNotification(CheckOutRequest request) async {
+    try {
+      // Only continue if we're online
+      if (_connectivityService.currentStatus == ConnectionStatus.offline) {
+        return;
+      }
+
+      // Format the request type for display - ensuring proper capitalization
+      String displayType = request.requestType == 'check-in' ? 'Check-In' : 'Check-Out';
+
+      // Try to find the manager's FCM token directly
+      final tokenDoc = await _firestore
+          .collection('fcm_tokens')
+          .doc(request.lineManagerId)
+          .get();
+
+      if (!tokenDoc.exists) {
+        // Try alternative ID format
+        final altId = request.lineManagerId.startsWith('EMP')
+            ? request.lineManagerId.substring(3)
+            : 'EMP${request.lineManagerId}';
+
+        final altTokenDoc = await _firestore
+            .collection('fcm_tokens')
+            .doc(altId)
+            .get();
+
+        if (!altTokenDoc.exists) {
+          debugPrint("REPO: No FCM token found for manager ${request.lineManagerId} or $altId");
+          return;
+        }
+
+        // Got token with alternative ID
+        String? token = altTokenDoc.data()?['token'];
+        if (token == null) {
+          debugPrint("REPO: FCM token is null for manager $altId");
+          return;
+        }
+
+        // Send direct notification with alt ID
+        await _firestore.collection('notifications').add({
+          'token': token,
+          'title': 'New $displayType Request',
+          'body': '${request.employeeName} has requested to ${request.requestType.replaceAll('-', ' ')} from an offsite location.',
+          'data': {
+            'type': 'new_check_out_request',
+            'employeeId': request.employeeId,
+            'employeeName': request.employeeName,
+            'locationName': request.locationName,
+            'requestType': request.requestType,
+            'managerId': altId,
+            'click_action': 'FLUTTER_NOTIFICATION_CLICK',
+          },
+          'sentAt': FieldValue.serverTimestamp(),
+        });
+
+        debugPrint("REPO: Direct notification scheduled for manager $altId");
+        return;
+      }
+
+      // Got token with original ID
+      String? token = tokenDoc.data()?['token'];
+      if (token == null) {
+        debugPrint("REPO: FCM token is null for manager ${request.lineManagerId}");
+        return;
+      }
+
+      // Send direct notification with original ID
+      await _firestore.collection('notifications').add({
+        'token': token,
+        'title': 'New $displayType Request',
+        'body': '${request.employeeName} has requested to ${request.requestType.replaceAll('-', ' ')} from an offsite location.',
+        'data': {
+          'type': 'new_check_out_request',
+          'employeeId': request.employeeId,
+          'employeeName': request.employeeName,
+          'locationName': request.locationName,
+          'requestType': request.requestType,
+          'managerId': request.lineManagerId,
+          'click_action': 'FLUTTER_NOTIFICATION_CLICK',
+        },
+        'sentAt': FieldValue.serverTimestamp(),
+      });
+
+      debugPrint("REPO: Direct notification scheduled for manager ${request.lineManagerId}");
+
+    } catch (e) {
+      debugPrint("REPO: Error sending direct manager notification: $e");
     }
   }
 }
